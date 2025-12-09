@@ -7,7 +7,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ================== CONFIG ==================
-BOT_TOKEN = "8567471850:AAG9wNB58cdE4NbtETziziGaOlvsiLmd3Ng"  # <<< paste your working token
+BOT_TOKEN = "8567471850:AAG9wNB58cdE4NbtETziziGaOlvsiLmd3Ng"  # <<< put your real token here
 DB_FILE = "rabbits.db"
 
 GESTATION_DAYS = 31
@@ -26,7 +26,6 @@ def safe_alter(cur, sql):
     try:
         cur.execute(sql)
     except sqlite3.OperationalError:
-        # column or table might already exist
         pass
 
 
@@ -42,7 +41,6 @@ def init_db():
             sex TEXT CHECK(sex IN ('M','F')) NOT NULL
         )
     """)
-    # Extra rabbit fields
     safe_alter(cur, "ALTER TABLE rabbits ADD COLUMN mother_id INTEGER")
     safe_alter(cur, "ALTER TABLE rabbits ADD COLUMN father_id INTEGER")
     safe_alter(cur, "ALTER TABLE rabbits ADD COLUMN cage TEXT")
@@ -241,7 +239,6 @@ def checkpair_inbreeding(name1, name2):
     if r1["id"] == r2["id"]:
         return "❌ Same rabbit. Cannot breed."
 
-    # parents
     parents1 = set(x for x in [r1["mother_id"], r1["father_id"]] if x)
     parents2 = set(x for x in [r2["mother_id"], r2["father_id"]] if x)
 
@@ -503,7 +500,6 @@ def record_sale(name, price, buyer):
         INSERT INTO sales(rabbit_id, sale_date, price, buyer)
         VALUES (?, ?, ?, ?)
     """, (rabbit["id"], today_str, price, buyer))
-    # mark sold
     cur.execute("UPDATE rabbits SET status='sold' WHERE id=?", (rabbit["id"],))
     conn.commit()
     conn.close()
@@ -579,7 +575,6 @@ def add_feed(amount_kg, cost, note=None):
 
 
 def get_profit_summary(period=None):
-    # period: None (all), 'YYYY-MM', 'YYYY'
     conn = get_db()
     cur = conn.cursor()
 
@@ -590,18 +585,16 @@ def get_profit_summary(period=None):
 
     if period is None:
         pass
-    elif len(period) == 7 and period[4] == "-":  # month
+    elif len(period) == 7 and period[4] == "-":
         sales_where = "WHERE sale_date LIKE ?"
         exp_where = "WHERE exp_date LIKE ?"
         like = period + "%"
-
         params_sales = [like]
         params_exp = [like]
-    elif len(period) == 4 and period.isdigit():  # year
+    elif len(period) == 4 and period.isdigit():
         sales_where = "WHERE sale_date LIKE ?"
         exp_where = "WHERE exp_date LIKE ?"
         like = period + "%"
-
         params_sales = [like]
         params_exp = [like]
 
@@ -846,7 +839,7 @@ def get_farmsummary_message():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🐰 Rabbit Farm Pro Bot\n\n"
+        "🐰 Rabbit Farm Bot\n\n"
         "Rabbits:\n"
         "/addrabbit NAME M/F\n"
         "/rabbits – list all\n"
@@ -1049,7 +1042,7 @@ async def litters_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def littername_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /littername Bella B1_2025")
+        await update.message.reply_text("Usage: /littername Bella BM1")
         return
     doe_name = context.args[0]
     litter_name = context.args[1]
@@ -1274,7 +1267,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
-        await update.message.reply_text("Usage: /info NAME")
+        await update.message.reply.Text("Usage: /info NAME")
         return
     msg = get_info_message(context.args[0])
     await update.message.reply_text(msg)
@@ -1407,7 +1400,7 @@ def main():
     app.add_handler(CommandHandler("subscribe", subscribe_cmd))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe_cmd))
 
-    # Python 3.14: create and set loop manually
+    # Create and set event loop (works well on Python 3.11 / 3.13)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
