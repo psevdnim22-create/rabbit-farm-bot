@@ -3176,7 +3176,6 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_"))
 
     # Rabbits
-    app.add_handler(CommandHandler("addrabbit_fast", addrabbit_cmd))
     app.add_handler(CommandHandler("rabbits", rabbits_cmd))
     app.add_handler(CommandHandler("active", active_cmd))
     app.add_handler(CommandHandler("setcage", setcage_cmd))
@@ -3262,6 +3261,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
