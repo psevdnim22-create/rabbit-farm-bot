@@ -22,6 +22,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable is not set")
 
+# OWNER_ID:
+#  - 0 means "no owner set yet" -> everyone can use commands
+#  - Once you know your Telegram user ID from /whoami,
+#    replace 0 with your ID (e.g. OWNER_ID = 123456789) to make bot private.
+OWNER_ID = 0  # <<< CHANGE THIS to your Telegram user ID to make the bot private
+
 DB_FILE = "rabbits.db"
 
 GESTATION_DAYS = 31
@@ -179,6 +185,32 @@ def get_setting(key: str):
     row = cur.fetchone()
     conn.close()
     return row["value"] if row else None
+
+
+# ================== OWNER CHECK (PRIVACY) ==================
+
+def is_owner(update: Update) -> bool:
+    """
+    Returns True if:
+      - OWNER_ID == 0 (no owner set yet, open mode)
+      - OR caller's user.id == OWNER_ID
+    """
+    user = update.effective_user
+    if OWNER_ID == 0:
+        # no owner set yet -> allow everyone
+        return True
+    return user is not None and user.id == OWNER_ID
+
+
+async def ensure_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Returns True if caller is owner, else sends error and returns False."""
+    if not is_owner(update):
+        if update.message:
+            await update.message.reply_text(
+                "⛔ This bot is private. You are not allowed to use this command."
+            )
+        return False
+    return True
 
 
 # ================== BASIC RABBIT FUNCS ==================
@@ -1461,6 +1493,9 @@ def get_climate_warning_short():
 # ================== TELEGRAM HANDLERS ==================
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     await update.message.reply_text(
         "🐰 Rabbit Farm Bot\n\n"
         "Rabbits:\n"
@@ -1525,7 +1560,9 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/achievements\n"
         "\nAutomation:\n"
         "/subscribe\n"
-        "/unsubscribe"
+        "/unsubscribe\n"
+        "\nDebug:\n"
+        "/whoami  (shows your Telegram user ID)"
     )
 
 
@@ -1533,9 +1570,19 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start_cmd(update, context)
 
 
+async def whoami_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """This one is NOT owner-locked so you can always see your ID."""
+    uid = update.effective_user.id
+    await update.message.reply_text(f"Your user ID is: {uid}\n\n"
+                                    "Put this number into OWNER_ID in rabbit_bot.py to lock the bot to you.")
+
+
 # ---- Rabbits ----
 
 async def addrabbit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 3:
         await update.message.reply_text("Usage: /addrabbit NAME M/F")
@@ -1553,6 +1600,9 @@ async def addrabbit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     rows = list_rabbits(active_only=False)
     if not rows:
         await update.message.reply_text("No rabbits in database.")
@@ -1564,6 +1614,9 @@ async def rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def active_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     rows = list_rabbits(active_only=True)
     if not rows:
         await update.message.reply_text("No active rabbits.")
@@ -1573,6 +1626,9 @@ async def active_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def setcage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 3:
         await update.message.reply_text("Usage: /setcage NAME CAGE [SECTION]")
@@ -1585,6 +1641,9 @@ async def setcage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def setparents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 4:
         await update.message.reply_text("Usage: /setparents CHILD MOTHER FATHER")
@@ -1595,6 +1654,9 @@ async def setparents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def checkpair_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 3:
         await update.message.reply_text("Usage: /checkpair RABBIT1 RABBIT2")
@@ -1604,6 +1666,9 @@ async def checkpair_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def markdead_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split(maxsplit=2)
     if len(parts) < 2:
         await update.message.reply_text("Usage: /markdead NAME [REASON]")
@@ -1617,6 +1682,9 @@ async def markdead_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- Breeding & litters ----
 
 async def breed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 3:
         await update.message.reply_text("Usage: /breed DOE BUCK")
@@ -1644,6 +1712,9 @@ async def breed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def forcebreed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Same as /breed but ignores inbreeding warnings (still blocks errors)."""
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 3:
         await update.message.reply_text("Usage: /forcebreed DOE BUCK")
@@ -1663,6 +1734,9 @@ async def forcebreed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def kindling_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split(maxsplit=3)
     if len(parts) < 3:
         await update.message.reply_text("Usage: /kindling DOE LITTER_SIZE [LITTERNAME]")
@@ -1679,6 +1753,9 @@ async def kindling_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def litters_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /litters DOE")
@@ -1701,6 +1778,9 @@ async def litters_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def littername_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split(maxsplit=2)
     if len(parts) < 3:
         await update.message.reply_text("Usage: /littername DOE LITTERNAME")
@@ -1711,6 +1791,9 @@ async def littername_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def nextdue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /nextdue DOE")
@@ -1726,15 +1809,26 @@ async def nextdue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     dues = get_due_today()
     tasks = get_tasks_for_date(date.today())
 
-    lines = []
+    lines = [f"🐰 Today: {date.today().isoformat()}"]
+
     if dues:
-        lines.append("🍼 Kindlings due today:")
+        lines.append("\n🍼 Kindlings due today:")
         lines.extend([f"- {r['name']}" for r in dues])
     else:
-        lines.append("No kindlings due today.")
+        lines.append("\nNo kindlings due today.")
+
+    weans = get_weaning_today()
+    if weans:
+        lines.append("\n🐇 Weaning today:")
+        lines.extend([f"- {r['name']}" for r in weans])
+    else:
+        lines.append("\nNo weaning scheduled today.")
 
     if tasks:
         lines.append("\n📌 Tasks for today:")
@@ -1746,10 +1840,18 @@ async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         lines.append("\nNo tasks for today.")
 
+    climate_short = get_climate_warning_short()
+    if climate_short:
+        lines.append("\n🌡 Climate alert:")
+        lines.append(climate_short)
+
     await update.message.reply_text("\n".join(lines))
 
 
 async def weaning_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     rows = get_weaning_today()
     if not rows:
         await update.message.reply_text("No weaning scheduled for today.")
@@ -1759,6 +1861,9 @@ async def weaning_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def suggestbreed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     pairs = suggest_breeding_pairs(limit=5)
     if not pairs:
         await update.message.reply_text(
@@ -1781,6 +1886,9 @@ async def suggestbreed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- Health & weights ----
 
 async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split(maxsplit=2)
     if len(parts) < 3:
         await update.message.reply_text("Usage: /health NAME note...")
@@ -1792,6 +1900,9 @@ async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def healthlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /healthlog NAME")
@@ -1808,6 +1919,9 @@ async def healthlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def weight_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 3:
         await update.message.reply_text("Usage: /weight NAME KG")
@@ -1823,6 +1937,9 @@ async def weight_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def weightlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /weightlog NAME")
@@ -1839,6 +1956,9 @@ async def weightlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def growth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /growth NAME")
@@ -1849,6 +1969,9 @@ async def growth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def growthchart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /growthchart NAME")
@@ -1861,6 +1984,9 @@ async def growthchart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- Money & feed ----
 
 async def sell_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split(maxsplit=3)
     if len(parts) < 3:
         await update.message.reply_text("Usage: /sell NAME PRICE [BUYER]")
@@ -1877,6 +2003,9 @@ async def sell_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def expense_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split(maxsplit=3)
     if len(parts) < 3:
         await update.message.reply_text("Usage: /expense AMOUNT CATEGORY [NOTE]")
@@ -1893,6 +2022,9 @@ async def expense_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def electric_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split(maxsplit=2)
     if len(parts) < 2:
         await update.message.reply_text("Usage: /electric AMOUNT [NOTE]")
@@ -1908,6 +2040,9 @@ async def electric_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def feed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split(maxsplit=3)
     if len(parts) < 3:
         await update.message.reply_text("Usage: /feed KG COST [NOTE]")
@@ -1924,6 +2059,9 @@ async def feed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def profit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     inc, exp, prof = get_profit_summary(None)
     await update.message.reply_text(
         f"💰 Profit (all time):\nIncome: {inc}\nExpenses: {exp}\nProfit: {prof}"
@@ -1931,6 +2069,9 @@ async def profit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def profitmonth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /profitmonth YYYY-MM")
@@ -1943,6 +2084,9 @@ async def profitmonth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def profityear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /profityear YYYY")
@@ -1955,6 +2099,9 @@ async def profityear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def feedstats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     kg, cost = get_feed_stats(None)
     await update.message.reply_text(
         f"🌾 Feed stats (all time):\nTotal feed: {kg} kg\nCost: {cost}"
@@ -1962,6 +2109,9 @@ async def feedstats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def feedmonth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /feedmonth YYYY-MM")
@@ -1976,6 +2126,9 @@ async def feedmonth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- Exports & backup ----
 
 async def export_rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     headers = ["id", "name", "sex", "mother_id", "father_id",
                "cage", "section", "status", "death_date", "death_reason", "photo_file_id"]
     path = export_table_to_csv("SELECT * FROM rabbits ORDER BY id", None, headers, "rabbits")
@@ -1992,6 +2145,9 @@ async def export_rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def export_breedings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     headers = ["id", "doe_id", "buck_id", "mating_date",
                "expected_due_date", "kindling_date", "litter_size", "weaning_date", "litter_name"]
     path = export_table_to_csv("SELECT * FROM breedings ORDER BY id", None, headers, "breedings")
@@ -2008,6 +2164,9 @@ async def export_breedings_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def export_sales_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     headers = ["id", "rabbit_id", "sale_date", "price", "buyer"]
     path = export_table_to_csv("SELECT * FROM sales ORDER BY id", None, headers, "sales")
     if not path:
@@ -2023,6 +2182,9 @@ async def export_sales_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def export_expenses_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     headers = ["id", "exp_date", "category", "amount", "note"]
     path = export_table_to_csv("SELECT * FROM expenses ORDER BY id", None, headers, "expenses")
     if not path:
@@ -2038,6 +2200,9 @@ async def export_expenses_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def backupdb_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     path = get_backup_db_path()
     if not path:
         await update.message.reply_text("Database file not found.")
@@ -2053,6 +2218,9 @@ async def backupdb_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- Tasks ----
 
 async def remind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split(maxsplit=2)
     if len(parts) < 3:
         await update.message.reply_text("Usage: /remind YYYY-MM-DD TEXT")
@@ -2069,6 +2237,9 @@ async def remind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def tasklist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     rows = get_upcoming_tasks(limit=20)
     if not rows:
         await update.message.reply_text("No upcoming tasks.")
@@ -2083,6 +2254,9 @@ async def tasklist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def donetask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /donetask ID")
@@ -2102,6 +2276,9 @@ async def donetask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- Info & analytics ----
 
 async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /info NAME")
@@ -2111,16 +2288,25 @@ async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     msg = get_stats_message()
     await update.message.reply_text(msg)
 
 
 async def farmsummary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     msg = get_farmsummary_message()
     await update.message.reply_text(msg)
 
 
 async def tree_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /tree NAME")
@@ -2131,6 +2317,9 @@ async def tree_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def lineperformance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /lineperformance NAME")
@@ -2141,6 +2330,9 @@ async def lineperformance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def keep_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /keep NAME")
@@ -2153,6 +2345,9 @@ async def keep_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- Climate ----
 
 async def settemp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     parts = update.message.text.split()
     if len(parts) < 2:
         await update.message.reply_text("Usage: /settemp C\nExample: /settemp 32")
@@ -2169,6 +2364,9 @@ async def settemp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def climatealert_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     msg = get_climate_warning_message()
     await update.message.reply_text(msg)
 
@@ -2176,6 +2374,9 @@ async def climatealert_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- Photos ----
 
 async def photo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     """Send stored photo of a rabbit."""
     parts = update.message.text.split()
     if len(parts) < 2:
@@ -2200,6 +2401,9 @@ async def photo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def photo_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     """Handle incoming photos: caption must start with rabbit name."""
     if not update.message or not update.message.photo:
         return
@@ -2223,6 +2427,9 @@ async def photo_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 # ---- Gamified achievements ----
 
 async def achievements_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     achievements = compute_achievements()
     await update.message.reply_text("🏅 Achievements:\n" + "\n".join(achievements))
 
@@ -2273,6 +2480,9 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def subscribe_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     if context.job_queue is None:
         await update.message.reply_text(
             "Job system is not available on this server, can't subscribe."
@@ -2299,6 +2509,9 @@ async def subscribe_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def unsubscribe_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
     if context.job_queue is None:
         await update.message.reply_text(
             "Job system is not available on this server, can't unsubscribe."
@@ -2327,6 +2540,11 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"OK")
 
+    def do_HEAD(self):
+        # So Render's HEAD check doesn't show 501
+        self.send_response(200)
+        self.end_headers()
+
 
 def start_http_server():
     port = int(os.environ.get("PORT", "10000"))
@@ -2342,6 +2560,7 @@ def build_app() -> Application:
 
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("whoami", whoami_cmd))
 
     # Rabbits
     app.add_handler(CommandHandler("addrabbit", addrabbit_cmd))
