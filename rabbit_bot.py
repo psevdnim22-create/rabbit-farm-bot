@@ -1550,6 +1550,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_owner(update, context):
         return
 
+    # 1) Send the big help text
     await update.message.reply_text(
         "🐰 Rabbit Farm Bot\n\n"
         "Rabbits:\n"
@@ -1619,6 +1620,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/whoami  (shows your Telegram user ID)"
     )
 
+    # 2) Show the button menu right after the help text
+    await menu_cmd(update, context)
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start_cmd(update, context)
@@ -2846,6 +2849,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
