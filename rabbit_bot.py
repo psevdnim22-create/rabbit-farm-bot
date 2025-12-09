@@ -156,7 +156,7 @@ def init_db():
         )
     """)
 
-     # Settings (for climate, etc.)
+    # Settings (for climate, etc.)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -164,7 +164,7 @@ def init_db():
         )
     """)
 
-    # Achievements
+    # Achievements (gamification)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS achievements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,50 +176,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-
-    conn.commit()
-    conn.close()
-    # ================== ACHIEVEMENTS (GAMIFICATION) ==================
-
-def unlock_achievement(key: str):
-    """Unlocks an achievement by key, only once."""
-    today = date.today().strftime("%Y-%m-%d")
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            "INSERT INTO achievements(key, unlocked_date) VALUES (?, ?)",
-            (key, today),
-        )
-        conn.commit()
-    except sqlite3.IntegrityError:
-        # already unlocked
-        pass
-    finally:
-        conn.close()
-
-
-def get_achievements():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM achievements ORDER BY unlocked_date, id")
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-
-def describe_achievement(key: str) -> str:
-    mapping = {
-        "first_rabbit": "🐰 First Rabbit – you added your first rabbit.",
-        "ten_rabbits": "🐰🐰 Rabbit Keeper – 10+ rabbits on the farm.",
-        "fifty_rabbits": "🐰🐰🐰 Rabbit Rancher – 50+ rabbits.",
-        "first_sale": "💸 First Sale – you sold your first rabbit.",
-        "profit_positive": "💰 In the Green – total profit is positive.",
-        "first_litter": "🍼 New Life – first litter born.",
-        "fifty_kits": "🐇 Rabbit Boom – 50+ kits recorded.",
-        "two_hundred_kits": "🌋 Population Explosion – 200+ kits total.",
-    }
-    return mapping.get(key, key)
 
 def set_setting(key: str, value: str):
     conn = get_db()
@@ -2890,6 +2846,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
