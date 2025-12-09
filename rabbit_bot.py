@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ================== CONFIG ==================
-BOT_TOKEN = "8567471850:AAG9wNB58cdE4NbtETziziGaOlvsiLmd3Ng"  # <<< PUT YOUR REAL TOKEN HERE
+BOT_TOKEN = "8567471850:AAFLucbYVdajcJx_FTQTIMPskgolMKiha_A"  # <<< PUT YOUR REAL TOKEN HERE
 DB_FILE = "rabbits.db"
 
 GESTATION_DAYS = 31
@@ -1535,3 +1535,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
