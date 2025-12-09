@@ -18,6 +18,7 @@ from telegram.ext import (
     filters,
 )
 
+ADD_NAME, ADD_SEX, ADD_WEIGHT, ADD_CAGE = range(4)
 
 
 
@@ -1739,6 +1740,61 @@ async def addrabbit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("new_rabbit", None)
     await update.message.reply_text("❌ Add-rabbit wizard cancelled.")
     return ConversationHandler.END
+async def start_add_rabbit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🐰 Let's add a new rabbit!\n\nWhat is the name?")
+    return ADD_NAME
+
+
+async def add_rabbit_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["name"] = update.message.text.strip()
+    await update.message.reply_text("Sex? Send M or F")
+    return ADD_SEX
+
+
+async def add_rabbit_sex(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sex = update.message.text.strip().upper()
+    if sex not in ("M", "F"):
+        await update.message.reply_text("❌ Please send M or F")
+        return ADD_SEX
+
+    context.user_data["sex"] = sex
+    await update.message.reply_text("Enter weight in kg (example: 2.4)")
+    return ADD_WEIGHT
+
+
+async def add_rabbit_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        weight = float(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ Please enter a number (example: 2.5)")
+        return ADD_WEIGHT
+
+    context.user_data["weight"] = weight
+    await update.message.reply_text("Enter cage number")
+    return ADD_CAGE
+
+
+async def add_rabbit_cage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cage = update.message.text.strip()
+
+    name = context.user_data["name"]
+    sex = context.user_data["sex"]
+    weight = context.user_data["weight"]
+
+    add_rabbit(name, sex)
+    add_weight(name, weight)
+    set_cage_section(name, cage)
+
+    await update.message.reply_text(
+        f"✅ Rabbit added!\n\n"
+        f"Name: {name}\n"
+        f"Sex: {sex}\n"
+        f"Weight: {weight} kg\n"
+        f"Cage: {cage}"
+    )
+
+    context.user_data.clear()
+    return ConversationHandler.END
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1969,27 +2025,170 @@ async def whoami_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Your user ID is: {uid}\n\n"
                                     "Put this number into OWNER_ID in rabbit_bot.py to lock the bot to you.")
 
+# ================== ADD-RABBIT WIZARD ==================
+
+async def addrabbit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Step 1: ask for name."""
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "➕ Adding a new rabbit.\n\n"
+        "1️⃣ Send the *name* of the rabbit:",
+        parse_mode="Markdown",
+    )
+    return ADD_NAME
+
+
+async def addrabbit_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Got name, now ask for sex."""
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    name = update.message.text.strip()
+    if not name:
+        await update.message.reply_text("Please send a non-empty name.")
+        return ADD_NAME
+
+    context.user_data["name"] = name
+    await update.message.reply_text(
+        f"Name set to *{name}*.\n\n"
+        "2️⃣ Is it male or female? Reply with *M* or *F*:",
+        parse_mode="Markdown",
+    )
+    return ADD_SEX
+
+
+async def addrabbit_sex(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Got sex, now ask for cage."""
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    sex = update.message.text.strip().upper()
+    if sex not in ("M", "F"):
+        await update.message.reply_text("Please reply with M or F.")
+        return ADD_SEX
+
+    context.user_data["sex"] = sex
+    await update.message.reply_text(
+        "3️⃣ Which *cage number* is this rabbit in?\n\n"
+        "Example: `A1`, `3`, `C-02`",
+        parse_mode="Markdown",
+    )
+    return ADD_CAGE
+
+
+async def addrabbit_cage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Got cage, now ask for section (optional)."""
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    cage = update.message.text.strip()
+    if not cage:
+        await update.message.reply_text("Please send a cage number.")
+        return ADD_CAGE
+
+    context.user_data["cage"] = cage
+    await update.message.reply_text(
+        "4️⃣ Section (optional).\n"
+        "If you use sections (e.g. *left*, *right*, *top*), send it now.\n"
+        "If you don't want to set a section, type *skip*.",
+        parse_mode="Markdown",
+    )
+    return ADD_SECTION
+
+
+async def addrabbit_section(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Got section (or skip), now ask for weight (optional)."""
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    text = update.message.text.strip()
+    if text.lower() == "skip":
+        context.user_data["section"] = None
+    else:
+        context.user_data["section"] = text
+
+    await update.message.reply_text(
+        "5️⃣ Weight in *kg* (optional).\n"
+        "Example: `2.3`\n"
+        "If you don't want to set weight now, type *skip*.",
+        parse_mode="Markdown",
+    )
+    return ADD_WEIGHT
+
+
+async def addrabbit_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Final step: create rabbit, then show summary."""
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    text = update.message.text.strip()
+    weight = None
+    if text.lower() != "skip":
+        try:
+            weight = float(text.replace(",", "."))
+        except ValueError:
+            await update.message.reply_text(
+                "Please send a number (like 2.3) for weight in kg, "
+                "or type *skip*.",
+                parse_mode="Markdown",
+            )
+            return ADD_WEIGHT
+
+    name = context.user_data.get("name")
+    sex = context.user_data.get("sex")
+    cage = context.user_data.get("cage")
+    section = context.user_data.get("section")
+
+    if not name or not sex:
+        await update.message.reply_text("Something went wrong, cancelling.")
+        return ConversationHandler.END
+
+    # 1) Create rabbit
+    ok = add_rabbit(name, sex)
+    if not ok:
+        await update.message.reply_text(
+            "❌ A rabbit with that name already exists. Cancelling."
+        )
+        return ConversationHandler.END
+
+    # 2) Set cage/section
+    if cage:
+        set_cage_section(name, cage, section)
+
+    # 3) Set weight if provided
+    if weight is not None:
+        add_weight(name, weight)
+
+    # 4) Build nice summary message
+    details = []
+    if cage:
+        loc = f"cage {cage}"
+        if section:
+            loc += f" / section {section}"
+        details.append(loc)
+    if weight is not None:
+        details.append(f"weight {weight} kg")
+
+    msg = f"✅ Rabbit *{name}* ({sex}) added."
+    if details:
+        msg += "\n" + ", ".join(details)
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+    return ConversationHandler.END
+
+
+async def addrabbit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allow user to cancel the wizard with /cancel."""
+    if update.message:
+        await update.message.reply_text("❌ Add-rabbit cancelled.")
+    return ConversationHandler.END
+
+
 
 # ---- Rabbits ----
 
-async def addrabbit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ensure_owner(update, context):
-        return
-
-    parts = update.message.text.split()
-    if len(parts) < 3:
-        await update.message.reply_text("Usage: /addrabbit NAME M/F")
-        return
-    name = parts[1]
-    sex = parts[2].upper()
-    if sex not in ("M", "F"):
-        await update.message.reply_text("Sex must be M or F.")
-        return
-    ok = add_rabbit(name, sex)
-    if ok:
-        await update.message.reply_text(f"✅ Rabbit {name} ({sex}) added.")
-    else:
-        await update.message.reply_text("❌ A rabbit with that name already exists.")
 
 
 async def rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3063,6 +3262,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
