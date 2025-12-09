@@ -7,13 +7,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import csv
 import tempfile
 
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+
 )
 
 # ================== CONFIG ==================
@@ -174,8 +170,59 @@ def set_setting(key: str, value: str):
         VALUES(?, ?)
         ON CONFLICT(key) DO UPDATE SET value=excluded.value
     """, (key, value))
+        # Achievements
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS achievements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT UNIQUE NOT NULL,
+            unlocked_date TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
+    # ================== ACHIEVEMENTS (GAMIFICATION) ==================
+
+def unlock_achievement(key: str):
+    """Unlocks an achievement by key, only once."""
+    today = date.today().strftime("%Y-%m-%d")
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO achievements(key, unlocked_date) VALUES (?, ?)",
+            (key, today),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        # already unlocked
+        pass
+    finally:
+        conn.close()
+
+
+def get_achievements():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM achievements ORDER BY unlocked_date, id")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def describe_achievement(key: str) -> str:
+    mapping = {
+        "first_rabbit": "🐰 First Rabbit – you added your first rabbit.",
+        "ten_rabbits": "🐰🐰 Rabbit Keeper – 10+ rabbits on the farm.",
+        "fifty_rabbits": "🐰🐰🐰 Rabbit Rancher – 50+ rabbits.",
+        "first_sale": "💸 First Sale – you sold your first rabbit.",
+        "profit_positive": "💰 In the Green – total profit is positive.",
+        "first_litter": "🍼 New Life – first litter born.",
+        "fifty_kits": "🐇 Rabbit Boom – 50+ kits recorded.",
+        "two_hundred_kits": "🌋 Population Explosion – 200+ kits total.",
+    }
+    return mapping.get(key, key)
+
 
 
 def get_setting(key: str):
@@ -221,11 +268,23 @@ def add_rabbit(name, sex):
     try:
         cur.execute("INSERT INTO rabbits(name, sex) VALUES (?, ?)", (name, sex))
         conn.commit()
+
+        # === Achievements: rabbit counts ===
+        cur.execute("SELECT COUNT(*) AS c FROM rabbits")
+        total = cur.fetchone()["c"]
+        if total == 1:
+            unlock_achievement("first_rabbit")
+        if total >= 10:
+            unlock_achievement("ten_rabbits")
+        if total >= 50:
+            unlock_achievement("fifty_rabbits")
+
         return True
     except sqlite3.IntegrityError:
         return False
     finally:
         conn.close()
+
 
 
 def list_rabbits(active_only=False):
@@ -473,10 +532,34 @@ def record_kindling(doe_name, litter_size, litter_name=None):
     conn.commit()
     conn.close()
 
+    # === Achievements: litters & kits ===
+    conn2 = get_db()
+    cur2 = conn2.cursor()
+    cur2.execute("""
+        SELECT COUNT(*) AS c FROM breedings
+        WHERE kindling_date IS NOT NULL
+    """)
+    litters = cur2.fetchone()["c"]
+    if litters == 1:
+        unlock_achievement("first_litter")
+
+    cur2.execute("""
+        SELECT COALESCE(SUM(litter_size), 0) AS s
+        FROM breedings
+        WHERE litter_size IS NOT NULL
+    """)
+    kits = cur2.fetchone()["s"]
+    if kits >= 50:
+        unlock_achievement("fifty_kits")
+    if kits >= 200:
+        unlock_achievement("two_hundred_kits")
+    conn2.close()
+
     msg = f"🍼 Kindling recorded for {doe_name}\nLitter size: {litter_size}\nWeaning: {weaning}"
     if litter_name:
         msg += f"\nLitter name: {litter_name}"
     return msg
+
 
 
 def get_due_today():
@@ -626,12 +709,19 @@ def record_sale(name, price, buyer):
     conn.commit()
     conn.close()
 
+    # === Achievements: sales & profit ===
+    unlock_achievement("first_sale")
+    income, expenses, profit = get_profit_summary(None)
+    if profit > 0:
+        unlock_achievement("profit_positive")
+
     extra = ""
     if price is not None:
         extra += f" for {price}"
     if buyer:
         extra += f" to {buyer}"
     return f"💸 Sale recorded for {name}{extra}."
+
 
 
 def add_weight(name, weight_kg):
@@ -1568,6 +1658,143 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start_cmd(update, context)
+
+async def achievements_cmd_internal(target, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Internal helper: works for both CallbackQuery (menu button)
+    and normal Message (/achievements command).
+    """
+    achievements = get_achievements()
+
+    if not achievements:
+        text = "🏆 No achievements unlocked yet.\nKeep working on your farm!"
+    else:
+        count = len(achievements)
+        level = max(1, (count + 1) // 2)
+
+        lines = [
+            f"🏆 *Your achievements* (Level {level})",
+            "",
+        ]
+        for row in achievements:
+            desc = describe_achievement(row["key"])
+            lines.append(f"- {desc} (since {row['unlocked_date']})")
+        text = "\n".join(lines)
+
+    # target can be a Message (update) or a CallbackQuery
+    if hasattr(target, "edit_message_text"):
+        await target.edit_message_text(text, parse_mode="Markdown")
+    else:
+        await target.message.reply_text(text, parse_mode="Markdown")
+
+
+async def achievements_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # If you use owner_guard, keep this; otherwise you can delete this 'if' block
+    if "owner_guard" in globals():
+        if not await owner_guard(update, context):
+            return
+
+    await achievements_cmd_internal(update, context)
+MAIN_MENU_TEXT = (
+    "🐰 *Rabbit Farm OS*\n\n"
+    "Choose a section:"
+)
+
+
+async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if "owner_guard" in globals():
+        if not await owner_guard(update, context):
+            return
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🐰 Rabbits", callback_data="menu_rabbits"),
+            InlineKeyboardButton("🧬 Breeding", callback_data="menu_breeding"),
+        ],
+        [
+            InlineKeyboardButton("💰 Finance", callback_data="menu_finance"),
+            InlineKeyboardButton("🌡 Climate", callback_data="menu_climate"),
+        ],
+        [
+            InlineKeyboardButton("📊 Stats", callback_data="menu_stats"),
+            InlineKeyboardButton("🏆 Achievements", callback_data="menu_achievements"),
+        ],
+    ]
+    await update.message.reply_text(
+        MAIN_MENU_TEXT,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown",
+    )
+
+
+async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "menu_rabbits":
+        await query.edit_message_text(
+            "🐰 *Rabbits menu*\n\n"
+            "/rabbits – list all\n"
+            "/active – active only\n"
+            "/info NAME – rabbit info\n"
+            "/growth NAME – growth analysis\n"
+            "/growthchart NAME – growth chart\n"
+            "/photo NAME – show photo\n",
+            parse_mode="Markdown",
+        )
+
+    elif data == "menu_breeding":
+        await query.edit_message_text(
+            "🧬 *Breeding menu*\n\n"
+            "/checkpair R1 R2 – check relation\n"
+            "/breed DOE BUCK – safe breeding\n"
+            "/forcebreed DOE BUCK – force breeding\n"
+            "/kindling DOE SIZE [NAME] – litter\n"
+            "/litters DOE – litter history\n"
+            "/nextdue DOE – next due\n"
+            "/today – due today\n"
+            "/weaning – weaning today\n"
+            "/lineperformance NAME – line stats\n",
+            parse_mode="Markdown",
+        )
+
+    elif data == "menu_finance":
+        await query.edit_message_text(
+            "💰 *Finance & feed menu*\n\n"
+            "/sell NAME PRICE [BUYER]\n"
+            "/expense AMOUNT CATEGORY [NOTE]\n"
+            "/electric AMOUNT [NOTE]\n"
+            "/feed KG COST [NOTE]\n"
+            "/profit – all time\n"
+            "/profitmonth YYYY-MM\n"
+            "/profityear YYYY\n"
+            "/feedstats – all time\n"
+            "/feedmonth YYYY-MM\n",
+            parse_mode="Markdown",
+        )
+
+    elif data == "menu_climate":
+        await query.edit_message_text(
+            "🌡 *Climate & environment*\n\n"
+            "/settemp C – set temperature\n"
+            "/sethumidity PERCENT – set humidity (if you added it)\n"
+            "/climatealert – risk check\n",
+            parse_mode="Markdown",
+        )
+
+    elif data == "menu_stats":
+        await query.edit_message_text(
+            "📊 *Stats & summaries*\n\n"
+            "/stats – rabbit stats\n"
+            "/farmsummary – farm + finance + feed\n"
+            "/achievements – your badges\n",
+            parse_mode="Markdown",
+        )
+
+    elif data == "menu_achievements":
+        await achievements_cmd_internal(query, context)
+
 
 
 async def whoami_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2558,9 +2785,15 @@ def start_http_server():
 def build_app() -> Application:
     app = Application.builder().token(BOT_TOKEN).build()
 
+    # Core
     app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("help", start_cmd))
     app.add_handler(CommandHandler("whoami", whoami_cmd))
+
+    # App Menu + Achievements
+    app.add_handler(CommandHandler("menu", menu_cmd))
+    app.add_handler(CommandHandler("achievements", achievements_cmd))
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_"))
 
     # Rabbits
     app.add_handler(CommandHandler("addrabbit", addrabbit_cmd))
@@ -2629,14 +2862,12 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("photo", photo_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, photo_upload_handler))
 
-    # Gamified
-    app.add_handler(CommandHandler("achievements", achievements_cmd))
-
     # Subscribe
     app.add_handler(CommandHandler("subscribe", subscribe_cmd))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe_cmd))
 
     return app
+
 
 
 def main():
@@ -2651,4 +2882,5 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
