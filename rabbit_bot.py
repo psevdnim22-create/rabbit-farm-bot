@@ -1,12 +1,20 @@
 import logging
 import sqlite3
-from datetime import date, timedelta, time
+from datetime import date, timedelta, time, datetime
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import csv
+import tempfile
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 # ================== CONFIG ==================
 # Get token from environment (Render Environment -> BOT_TOKEN)
@@ -54,7 +62,6 @@ def init_db():
     safe_alter(cur, "ALTER TABLE rabbits ADD COLUMN status TEXT DEFAULT 'active'")
     safe_alter(cur, "ALTER TABLE rabbits ADD COLUMN death_date TEXT")
     safe_alter(cur, "ALTER TABLE rabbits ADD COLUMN death_reason TEXT")
-    # NEW: photo support
     safe_alter(cur, "ALTER TABLE rabbits ADD COLUMN photo_file_id TEXT")
 
     # Breedings
@@ -284,7 +291,7 @@ def checkpair_inbreeding(name1, name2):
     return "✅ No close relation found (parents/grandparents)."
 
 
-# ==== PHOTO SUPPORT (NEW) ====
+# ==== PHOTO SUPPORT ====
 
 def set_rabbit_photo(name: str, file_id: str):
     """Save Telegram file_id of a photo for a rabbit."""
@@ -774,7 +781,6 @@ def get_info_message(name):
         f = father["name"] if father else "unknown"
         lines.append(f"Parents: {m} × {f}")
 
-    # Photo info
     if r["photo_file_id"]:
         lines.append("Photo: 📷 stored (use /photo " + r["name"] + " to view)")
 
@@ -844,6 +850,142 @@ def get_farmsummary_message():
     return msg
 
 
+# ================== ADVANCED ANALYTICS & UTILITIES ==================
+
+def build_family_tree(name: str) -> str:
+    """Return a small text family tree for a rabbit."""
+    r = get_rabbit(name)
+    if not r:
+        return "❌ Rabbit not found."
+
+    lines = [f"👨‍👩‍👧 Family tree for {r['name']} ({r['sex']})"]
+
+    # Parents
+    mother = get_rabbit_by_id(r["mother_id"])
+    father = get_rabbit_by_id(r["father_id"])
+    if mother or father:
+        m = mother["name"] if mother else "unknown"
+        f = father["name"] if father else "unknown"
+        lines.append(f"Parents: {m} × {f}")
+    else:
+        lines.append("Parents: unknown")
+
+    # Grandparents
+    def parent_names(p):
+        if not p:
+            return "unknown"
+        gm = get_rabbit_by_id(p["mother_id"])
+        gf = get_rabbit_by_id(p["father_id"])
+        gm_name = gm["name"] if gm else "unknown"
+        gf_name = gf["name"] if gf else "unknown"
+        return f"{gm_name} × {gf_name}"
+
+    if mother or father:
+        lines.append("Grandparents:")
+        if mother:
+            lines.append(f"  Maternal: {parent_names(mother)}")
+        if father:
+            lines.append(f"  Paternal: {parent_names(father)}")
+
+    # Children (direct)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT name, sex FROM rabbits
+        WHERE mother_id=? OR father_id=?
+        ORDER BY name
+    """, (r["id"], r["id"]))
+    children = cur.fetchall()
+    conn.close()
+
+    if children:
+        lines.append("Children:")
+        for c in children:
+            lines.append(f"  - {c['name']} ({c['sex']})")
+    else:
+        lines.append("Children: none recorded")
+
+    return "\n".join(lines)
+
+
+def compute_growth_message(name: str) -> str:
+    """Use weight log to compute average daily gain."""
+    rabbit, rows = get_weight_log(name, limit=1000)
+    if not rabbit:
+        return "❌ Rabbit not found."
+    if len(rows) < 2:
+        return f"Not enough weight records for {name} (need at least 2)."
+
+    # rows are ordered by weigh_date DESC, so reverse
+    records = list(reversed(rows))
+    data = []
+    for r in records:
+        try:
+            d = datetime.fromisoformat(r["weigh_date"]).date()
+        except Exception:
+            continue
+        data.append((d, float(r["weight_kg"])))
+
+    if len(data) < 2:
+        return f"Not enough valid weight records for {name}."
+
+    start_date, start_w = data[0]
+    end_date, end_w = data[-1]
+    days = (end_date - start_date).days
+    if days <= 0:
+        return f"Growth period is too short for {name}."
+
+    gain = end_w - start_w
+    daily = gain / days
+
+    msg = [f"📈 Growth for {rabbit['name']}:"]
+    msg.append(f"- From {start_date} ({start_w} kg) to {end_date} ({end_w} kg)")
+    msg.append(f"- Total gain: {gain:.3f} kg over {days} days")
+    msg.append(f"- Average daily gain: {daily*1000:.1f} g/day")
+
+    if daily * 1000 < 15:
+        msg.append("⚠️ Growth seems slow. Check health, feed quality and quantity.")
+    elif daily * 1000 > 35:
+        msg.append("✅ Very good growth rate.")
+    else:
+        msg.append("🙂 Normal growth rate.")
+
+    return "\n".join(msg)
+
+
+def export_table_to_csv(query: str, params, headers, filename_prefix: str) -> str | None:
+    """
+    Run SQL and write results as CSV to a temporary file.
+    Returns the full file path or None if no rows.
+    """
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(query, params or [])
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        return None
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename_prefix}.csv")
+    tmp_path = tmp.name
+
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)
+        for row in rows:
+            writer.writerow([row[h] for h in headers])
+
+    return tmp_path
+
+
+def get_backup_db_path() -> str | None:
+    """Return path to rabbits.db if it exists, else None."""
+    if os.path.exists(DB_FILE):
+        return DB_FILE
+    return None
+
+
 # ================== TELEGRAM HANDLERS ==================
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -859,6 +1001,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/markdead NAME [REASON]\n"
         "\nBreeding & litters:\n"
         "/breed DOE BUCK\n"
+        "/forcebreed DOE BUCK  (ignore inbreeding warning)\n"
         "/kindling DOE LITTER_SIZE [LITTERNAME]\n"
         "/litters DOE\n"
         "/littername DOE LITTERNAME\n"
@@ -884,13 +1027,21 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/remind YYYY-MM-DD TEXT\n"
         "/tasklist\n"
         "/donetask ID\n"
-        "\nInfo:\n"
+        "\nInfo & analytics:\n"
         "/info NAME\n"
         "/stats\n"
         "/farmsummary\n"
+        "/tree NAME\n"
+        "/growth NAME\n"
         "\nPhotos:\n"
         "Send a photo with caption = NAME to assign it\n"
         "/photo NAME (show stored photo)\n"
+        "\nData & backup:\n"
+        "/export_rabbits\n"
+        "/export_breedings\n"
+        "/export_sales\n"
+        "/export_expenses\n"
+        "/backupdb\n"
         "\nAutomation:\n"
         "/subscribe\n"
         "/unsubscribe"
@@ -990,8 +1141,31 @@ async def breed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /breed DOE BUCK")
         return
     doe, buck = parts[1], parts[2]
+
+    # Inbreeding warning first
+    warning = checkpair_inbreeding(doe, buck)
+    if warning.startswith("⚠️") or "Same rabbit" in warning:
+        await update.message.reply_text(
+            warning
+            + "\n\n❗ Breeding blocked.\n"
+              "If you still want to do this breeding, use:\n"
+              f"/forcebreed {doe} {buck}"
+        )
+        return
+
     msg = add_breeding(doe, buck)
     await update.message.reply_text(msg)
+
+
+async def forcebreed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Same as /breed but ignores inbreeding warnings."""
+    parts = update.message.text.split()
+    if len(parts) < 3:
+        await update.message.reply_text("Usage: /forcebreed DOE BUCK")
+        return
+    doe, buck = parts[1], parts[2]
+    msg = add_breeding(doe, buck)
+    await update.message.reply_text("⚠️ Forced breeding:\n" + msg)
 
 
 async def kindling_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1265,6 +1439,83 @@ async def feedmonth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ---- Exports & backup ----
+
+async def export_rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    headers = ["id", "name", "sex", "mother_id", "father_id",
+               "cage", "section", "status", "death_date", "death_reason", "photo_file_id"]
+    path = export_table_to_csv("SELECT * FROM rabbits ORDER BY id", None, headers, "rabbits")
+    if not path:
+        await update.message.reply_text("No rabbits to export.")
+        return
+    await context.bot.send_document(
+        chat_id=update.effective_chat.id,
+        document=open(path, "rb"),
+        filename="rabbits_export.csv",
+        caption="🐰 Rabbits export"
+    )
+    os.remove(path)
+
+
+async def export_breedings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    headers = ["id", "doe_id", "buck_id", "mating_date",
+               "expected_due_date", "kindling_date", "litter_size", "weaning_date", "litter_name"]
+    path = export_table_to_csv("SELECT * FROM breedings ORDER BY id", None, headers, "breedings")
+    if not path:
+        await update.message.reply_text("No breedings to export.")
+        return
+    await context.bot.send_document(
+        chat_id=update.effective_chat.id,
+        document=open(path, "rb"),
+        filename="breedings_export.csv",
+        caption="🍼 Breedings export"
+    )
+    os.remove(path)
+
+
+async def export_sales_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    headers = ["id", "rabbit_id", "sale_date", "price", "buyer"]
+    path = export_table_to_csv("SELECT * FROM sales ORDER BY id", None, headers, "sales")
+    if not path:
+        await update.message.reply_text("No sales to export.")
+        return
+    await context.bot.send_document(
+        chat_id=update.effective_chat.id,
+        document=open(path, "rb"),
+        filename="sales_export.csv",
+        caption="💸 Sales export"
+    )
+    os.remove(path)
+
+
+async def export_expenses_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    headers = ["id", "exp_date", "category", "amount", "note"]
+    path = export_table_to_csv("SELECT * FROM expenses ORDER BY id", None, headers, "expenses")
+    if not path:
+        await update.message.reply_text("No expenses to export.")
+        return
+    await context.bot.send_document(
+        chat_id=update.effective_chat.id,
+        document=open(path, "rb"),
+        filename="expenses_export.csv",
+        caption="💰 Expenses export"
+    )
+    os.remove(path)
+
+
+async def backupdb_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    path = get_backup_db_path()
+    if not path:
+        await update.message.reply_text("Database file not found.")
+        return
+    await context.bot.send_document(
+        chat_id=update.effective_chat.id,
+        document=open(path, "rb"),
+        filename="rabbits.db",
+        caption="📦 Database backup"
+    )
+
+
 # ---- Tasks ----
 
 async def remind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1314,7 +1565,7 @@ async def donetask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Task not found.")
 
 
-# ---- Info ----
+# ---- Info & analytics ----
 
 async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = update.message.text.split()
@@ -1335,7 +1586,27 @@ async def farmsummary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-# ---- Photos (NEW) ----
+async def tree_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    parts = update.message.text.split()
+    if len(parts) < 2:
+        await update.message.reply_text("Usage: /tree NAME")
+        return
+    name = parts[1]
+    msg = build_family_tree(name)
+    await update.message.reply_text(msg)
+
+
+async def growth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    parts = update.message.text.split()
+    if len(parts) < 2:
+        await update.message.reply_text("Usage: /growth NAME")
+        return
+    name = parts[1]
+    msg = compute_growth_message(name)
+    await update.message.reply_text(msg)
+
+
+# ---- Photos ----
 
 async def photo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send stored photo of a rabbit."""
@@ -1374,7 +1645,6 @@ async def photo_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    # Use first word of caption as rabbit name
     name = caption.split()[0]
     photo = update.message.photo[-1]  # highest resolution
     file_id = photo.file_id
@@ -1505,6 +1775,7 @@ def build_app() -> Application:
 
     # Breeding & litters
     app.add_handler(CommandHandler("breed", breed_cmd))
+    app.add_handler(CommandHandler("forcebreed", forcebreed_cmd))
     app.add_handler(CommandHandler("kindling", kindling_cmd))
     app.add_handler(CommandHandler("litters", litters_cmd))
     app.add_handler(CommandHandler("littername", littername_cmd))
@@ -1529,15 +1800,24 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("feedstats", feedstats_cmd))
     app.add_handler(CommandHandler("feedmonth", feedmonth_cmd))
 
+    # Exports / backup
+    app.add_handler(CommandHandler("export_rabbits", export_rabbits_cmd))
+    app.add_handler(CommandHandler("export_breedings", export_breedings_cmd))
+    app.add_handler(CommandHandler("export_sales", export_sales_cmd))
+    app.add_handler(CommandHandler("export_expenses", export_expenses_cmd))
+    app.add_handler(CommandHandler("backupdb", backupdb_cmd))
+
     # Tasks
     app.add_handler(CommandHandler("remind", remind_cmd))
     app.add_handler(CommandHandler("tasklist", tasklist_cmd))
     app.add_handler(CommandHandler("donetask", donetask_cmd))
 
-    # Info
+    # Info & analytics
     app.add_handler(CommandHandler("info", info_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("farmsummary", farmsummary_cmd))
+    app.add_handler(CommandHandler("tree", tree_cmd))
+    app.add_handler(CommandHandler("growth", growth_cmd))
 
     # Photos
     app.add_handler(CommandHandler("photo", photo_cmd))
