@@ -148,8 +148,37 @@ def init_db():
         )
     """)
 
+    # Settings (for climate, etc.)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+
     conn.commit()
     conn.close()
+
+
+def set_setting(key: str, value: str):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO settings(key, value)
+        VALUES(?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, (key, value))
+    conn.commit()
+    conn.close()
+
+
+def get_setting(key: str):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM settings WHERE key=?", (key,))
+    row = cur.fetchone()
+    conn.close()
+    return row["value"] if row else None
 
 
 # ================== BASIC RABBIT FUNCS ==================
@@ -249,46 +278,82 @@ def mark_dead(name, reason=None):
     return f"☠️ {name} marked as dead." + (f" Reason: {reason}" if reason else "")
 
 
-def checkpair_inbreeding(name1, name2):
+# ==== INBREEDING ASSESSMENT ====
+
+def assess_inbreeding(name1, name2):
+    """
+    Returns (severity, message)
+    severity in {"error", "danger", "warning", "none"}.
+    """
     r1 = get_rabbit(name1)
     r2 = get_rabbit(name2)
     if not r1 or not r2:
-        return "❌ One or both rabbits not found."
+        return "error", "❌ One or both rabbits not found."
     if r1["id"] == r2["id"]:
-        return "❌ Same rabbit."
+        return "error", "❌ Same rabbit."
 
     parents1 = set(x for x in [r1["mother_id"], r1["father_id"]] if x)
     parents2 = set(x for x in [r2["mother_id"], r2["father_id"]] if x)
 
+    # Parent–offspring
     if r1["id"] in parents2 or r2["id"] in parents1:
-        return "⚠️ High inbreeding: parent–offspring."
+        return "danger", "⚠️ DANGEROUS inbreeding: parent–offspring."
 
+    # Shared parents = siblings (full or half)
     common_parents = parents1 & parents2
     if common_parents:
-        names = [get_rabbit_by_id(pid)["name"] for pid in common_parents]
-        return f"⚠️ Close relation: shared parent(s) {', '.join(names)}."
+        full = (
+            r1["mother_id"]
+            and r1["mother_id"] == r2["mother_id"]
+            and r1["father_id"]
+            and r1["father_id"] == r2["father_id"]
+        )
+        parent_names = []
+        for pid in common_parents:
+            p = get_rabbit_by_id(pid)
+            if p:
+                parent_names.append(p["name"])
+        parents_str = ", ".join(parent_names) if parent_names else "shared parent"
 
-    def parents_ids(r):
-        return [x for x in [r["mother_id"], r["father_id"]] if x]
+        if full:
+            msg = f"⚠️ DANGEROUS inbreeding: full siblings (parents: {parents_str})."
+        else:
+            msg = f"⚠️ DANGEROUS inbreeding: half-siblings (shared parent(s): {parents_str})."
+        return "danger", msg
 
+    # Grandparents (cousin-level)
     def grandparents_ids(r):
         ids = set()
-        for pid in parents_ids(r):
-            pr = get_rabbit_by_id(pid)
-            if pr:
-                for g in [pr["mother_id"], pr["father_id"]]:
-                    if g:
-                        ids.add(g)
+        for pid in [r["mother_id"], r["father_id"]]:
+            if pid:
+                pr = get_rabbit_by_id(pid)
+                if pr:
+                    for g in [pr["mother_id"], pr["father_id"]]:
+                        if g:
+                            ids.add(g)
         return ids
 
     gp1 = grandparents_ids(r1)
     gp2 = grandparents_ids(r2)
     common_gp = gp1 & gp2
     if common_gp:
-        names = [get_rabbit_by_id(gid)["name"] for gid in common_gp]
-        return f"⚠️ Related: shared grandparent(s) {', '.join(names)}."
+        names = []
+        for gid in common_gp:
+            g = get_rabbit_by_id(gid)
+            if g:
+                names.append(g["name"])
+        if names:
+            return "warning", f"⚠️ Related: shared grandparent(s) {', '.join(names)}."
+        else:
+            return "warning", "⚠️ Related: shared grandparent(s)."
 
-    return "✅ No close relation found (parents/grandparents)."
+    return "none", "✅ No close relation found (parents/grandparents)."
+
+
+def checkpair_inbreeding(name1, name2):
+    """Keeps old interface for /checkpair, just returns the message."""
+    _, msg = assess_inbreeding(name1, name2)
+    return msg
 
 
 # ==== PHOTO SUPPORT ====
@@ -953,6 +1018,76 @@ def compute_growth_message(name: str) -> str:
     return "\n".join(msg)
 
 
+def build_growth_chart_ascii(name: str) -> str:
+    """Return ASCII chart of weights over time."""
+    rabbit, rows = get_weight_log(name, limit=50)
+    if not rabbit:
+        return "❌ Rabbit not found."
+    if len(rows) < 2:
+        return f"Not enough weight records for {name} (need at least 2)."
+
+    records = list(reversed(rows))
+    data = []
+    for r in records:
+        try:
+            d = datetime.fromisoformat(r["weigh_date"]).date()
+        except Exception:
+            continue
+        data.append((d, float(r["weight_kg"])))
+    if len(data) < 2:
+        return f"Not enough valid weight records for {name}."
+
+    weights = [w for _, w in data]
+    min_w = min(weights)
+    max_w = max(weights)
+
+    if max_w == min_w:
+        lines = [f"📊 Growth chart for {rabbit['name']}:"]
+        for d, w in data:
+            lines.append(f"{d}: {w:.3f} kg | ▇")
+        return "\n".join(lines)
+
+    lines = [f"📊 Growth chart for {rabbit['name']}: (ASCII)"]
+    max_blocks = 10
+    for d, w in data:
+        rel = (w - min_w) / (max_w - min_w)
+        blocks = int(round(rel * max_blocks))
+        blocks = max(1, blocks)
+        bar = "▇" * blocks
+        lines.append(f"{d}: {w:.3f} kg | {bar}")
+
+    lines.append(f"\nMin: {min_w:.3f} kg, Max: {max_w:.3f} kg")
+    return "\n".join(lines)
+
+
+def get_growth_stats(name: str):
+    """Return (has_data, daily_grams, days, gain_kg) for internal decisions."""
+    rabbit, rows = get_weight_log(name, limit=1000)
+    if not rabbit or len(rows) < 2:
+        return False, None, None, None
+
+    records = list(reversed(rows))
+    data = []
+    for r in records:
+        try:
+            d = datetime.fromisoformat(r["weigh_date"]).date()
+        except Exception:
+            continue
+        data.append((d, float(r["weight_kg"])))
+    if len(data) < 2:
+        return False, None, None, None
+
+    start_date, start_w = data[0]
+    end_date, end_w = data[-1]
+    days = (end_date - start_date).days
+    if days <= 0:
+        return False, None, None, None
+
+    gain = end_w - start_w
+    daily = (gain / days) * 1000.0  # g/day
+    return True, daily, days, gain
+
+
 def export_table_to_csv(query: str, params, headers, filename_prefix: str) -> str | None:
     """
     Run SQL and write results as CSV to a temporary file.
@@ -986,6 +1121,343 @@ def get_backup_db_path() -> str | None:
     return None
 
 
+def get_line_performance_message(name: str) -> str:
+    """Basic line performance: litters, kits, survival, income from offspring."""
+    r = get_rabbit(name)
+    if not r:
+        return "❌ Rabbit not found."
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if r["sex"] == "F":
+        # Doe line: based on her breedings and children as mother
+        cur.execute("""
+            SELECT COUNT(*) AS c, COALESCE(SUM(litter_size),0) AS s
+            FROM breedings
+            WHERE doe_id=?
+        """, (r["id"],))
+        br = cur.fetchone()
+        litters = br["c"]
+        total_kits_recorded = int(br["s"] or 0)
+
+        cur.execute("SELECT COUNT(*) AS c FROM rabbits WHERE mother_id=?", (r["id"],))
+        kits_alive = cur.fetchone()["c"]
+
+        cur.execute("""
+            SELECT COALESCE(SUM(s.price),0) AS income
+            FROM rabbits k
+            JOIN sales s ON s.rabbit_id = k.id
+            WHERE k.mother_id=?
+        """, (r["id"],))
+        income = cur.fetchone()["income"]
+    else:
+        # Buck line: based on breedings with him and children as father
+        cur.execute("""
+            SELECT COUNT(*) AS c, COALESCE(SUM(litter_size),0) AS s
+            FROM breedings
+            WHERE buck_id=?
+        """, (r["id"],))
+        br = cur.fetchone()
+        litters = br["c"]
+        total_kits_recorded = int(br["s"] or 0)
+
+        cur.execute("SELECT COUNT(*) AS c FROM rabbits WHERE father_id=?", (r["id"],))
+        kits_alive = cur.fetchone()["c"]
+
+        cur.execute("""
+            SELECT COALESCE(SUM(s.price),0) AS income
+            FROM rabbits k
+            JOIN sales s ON s.rabbit_id = k.id
+            WHERE k.father_id=?
+        """, (r["id"],))
+        income = cur.fetchone()["income"]
+
+    conn.close()
+
+    avg_litter = (total_kits_recorded / litters) if litters > 0 else 0
+    survival_rate = (kits_alive / total_kits_recorded * 100) if total_kits_recorded > 0 else None
+
+    lines = [f"📊 Line performance for {r['name']} ({r['sex']}):"]
+    lines.append(f"- Litters recorded: {litters}")
+    lines.append(f"- Total kits recorded: {total_kits_recorded}")
+    lines.append(f"- Kits currently in DB from this line: {kits_alive}")
+    lines.append(f"- Average litter size: {avg_litter:.2f}" if litters > 0 else "- Average litter size: n/a")
+    if survival_rate is not None:
+        lines.append(f"- Approx. survival (kits in DB / kits recorded): {survival_rate:.1f}%")
+    else:
+        lines.append("- Survival: n/a")
+    lines.append(f"- Income from offspring sales: {income}")
+
+    # Simple rating
+    rating = "⭐"
+    if litters >= 3 and survival_rate and survival_rate >= 85 and income >= 0:
+        rating = "⭐⭐⭐⭐"
+    elif litters >= 2 and survival_rate and survival_rate >= 70:
+        rating = "⭐⭐⭐"
+    elif litters >= 1:
+        rating = "⭐⭐"
+
+    lines.append(f"- Line rating: {rating}")
+    return "\n".join(lines)
+
+
+def decide_keep_or_sell(name: str) -> str:
+    """Heuristic suggestion to keep as breeder or sell."""
+    r = get_rabbit(name)
+    if not r:
+        return "❌ Rabbit not found."
+
+    has_growth, daily_g, days, gain = get_growth_stats(name)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if r["sex"] == "F":
+        # Doe: look at litters & survival & income
+        cur.execute("""
+            SELECT COUNT(*) AS c, COALESCE(SUM(litter_size),0) AS s
+            FROM breedings
+            WHERE doe_id=? AND kindling_date IS NOT NULL
+        """, (r["id"],))
+        br = cur.fetchone()
+        litters = br["c"]
+        total_kits_recorded = int(br["s"] or 0)
+
+        cur.execute("SELECT COUNT(*) AS c FROM rabbits WHERE mother_id=?", (r["id"],))
+        kits_alive = cur.fetchone()["c"]
+
+        cur.execute("""
+            SELECT COALESCE(SUM(s.price),0) AS income
+            FROM rabbits k
+            JOIN sales s ON s.rabbit_id = k.id
+            WHERE k.mother_id=?
+        """, (r["id"],))
+        income = cur.fetchone()["income"]
+    else:
+        # Buck: children count and income
+        cur.execute("SELECT COUNT(*) AS c FROM rabbits WHERE father_id=?", (r["id"],))
+        kits_alive = cur.fetchone()["c"]
+
+        cur.execute("""
+            SELECT COALESCE(SUM(s.price),0) AS income
+            FROM rabbits k
+            JOIN sales s ON s.rabbit_id = k.id
+            WHERE k.father_id=?
+        """, (r["id"],))
+        income = cur.fetchone()["income"]
+
+        litters = None
+        total_kits_recorded = None
+
+    conn.close()
+
+    lines = [f"🧠 Keep or sell analysis for {r['name']} ({r['sex']}):"]
+
+    if has_growth:
+        lines.append(f"- Growth: {daily_g:.1f} g/day over {days} days (total gain {gain:.3f} kg)")
+    else:
+        lines.append("- Growth: not enough data (add more /weight logs)")
+
+    if r["sex"] == "F":
+        lines.append(f"- Litters: {litters}, kits recorded: {total_kits_recorded}, kits alive in DB: {kits_alive}")
+    else:
+        lines.append(f"- Offspring currently in DB: {kits_alive}")
+
+    lines.append(f"- Income from offspring: {income}")
+
+    # Simple rules
+    recommendation = ""
+
+    if r["sex"] == "F":
+        survival_rate = (kits_alive / total_kits_recorded * 100) if total_kits_recorded else None
+
+        if litters and litters >= 2 and survival_rate and survival_rate >= 80 and (not has_growth or daily_g >= 20):
+            recommendation = "✅ Recommendation: KEEP as breeder (good mother line)."
+        elif (litters is None or litters == 0) and has_growth and daily_g < 20:
+            recommendation = "❌ Recommendation: SELL / meat (no litters and slow growth)."
+        else:
+            recommendation = "➖ Recommendation: Borderline – keep under observation."
+    else:
+        if kits_alive >= 20 and (not has_growth or daily_g >= 20):
+            recommendation = "✅ Recommendation: KEEP as breeding buck (many offspring & decent growth)."
+        elif kits_alive == 0 and has_growth and daily_g < 20:
+            recommendation = "❌ Recommendation: SELL / meat (no offspring and slow growth)."
+        else:
+            recommendation = "➖ Recommendation: Borderline – keep under observation."
+
+    lines.append("")
+    lines.append(recommendation)
+    return "\n".join(lines)
+
+
+def suggest_breeding_pairs(limit: int = 5):
+    """Return a list of suggested doe-buck pairs with a score."""
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM rabbits WHERE sex='F' AND status='active' ORDER BY name")
+    does = cur.fetchall()
+    cur.execute("SELECT * FROM rabbits WHERE sex='M' AND status='active' ORDER BY name")
+    bucks = cur.fetchall()
+
+    if not does or not bucks:
+        conn.close()
+        return []
+
+    results = []
+
+    for d in does:
+        # doe stats
+        cur.execute("""
+            SELECT COUNT(*) AS c, COALESCE(SUM(litter_size),0) AS s
+            FROM breedings
+            WHERE doe_id=? AND kindling_date IS NOT NULL
+        """, (d["id"],))
+        br = cur.fetchone()
+        litters = br["c"]
+        total_kits = int(br["s"] or 0)
+        avg_litter = (total_kits / litters) if litters > 0 else 0
+        has_g, daily_g, _, _ = get_growth_stats(d["name"])
+
+        for b in bucks:
+            severity, _ = assess_inbreeding(d["name"], b["name"])
+            if severity == "danger":
+                continue  # skip
+
+            score = 0.0
+            # inbreeding safety
+            if severity == "none":
+                score += 5.0
+            elif severity == "warning":
+                score += 1.0
+
+            # doe productivity
+            score += avg_litter * 2.0
+            score += litters * 1.0
+
+            if has_g and daily_g:
+                score += daily_g / 10.0  # small boost for better growth
+
+            # buck: number of children in DB
+            cur.execute("SELECT COUNT(*) AS c FROM rabbits WHERE father_id=?", (b["id"],))
+            off = cur.fetchone()["c"]
+            score += off * 0.3
+
+            results.append((score, d["name"], b["name"], severity))
+
+    conn.close()
+
+    results.sort(key=lambda x: x[0], reverse=True)
+    return results[:limit]
+
+
+def compute_achievements():
+    """Calculate unlocked achievements based on farm data."""
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Litters & kits
+    cur.execute("SELECT COUNT(*) AS c FROM breedings WHERE kindling_date IS NOT NULL")
+    litters = cur.fetchone()["c"]
+
+    cur.execute("SELECT COALESCE(SUM(litter_size),0) AS s FROM breedings WHERE litter_size IS NOT NULL")
+    total_kits = int(cur.fetchone()["s"] or 0)
+
+    # Rabbits & sales
+    cur.execute("SELECT COUNT(*) AS c FROM rabbits")
+    rabbits = cur.fetchone()["c"]
+
+    cur.execute("SELECT COUNT(*) AS c FROM sales")
+    sales = cur.fetchone()["c"]
+
+    income, expenses, profit = get_profit_summary(None)
+    feed_kg, feed_cost = get_feed_stats(None)
+
+    conn.close()
+
+    achievements = []
+
+    # Breeding
+    if litters >= 1:
+        achievements.append("🏅 Starter Breeder: recorded your first litter.")
+    if litters >= 10:
+        achievements.append("🏆 Pro Breeder: 10 litters recorded.")
+    if total_kits >= 50:
+        achievements.append("🐇 Baby Boom: 50 kits recorded.")
+    if total_kits >= 200:
+        achievements.append("🐰 Mega Farm: 200+ kits recorded.")
+
+    # Sales & money
+    if sales >= 1:
+        achievements.append("💸 First Sale: sold your first rabbit.")
+    if profit > 0:
+        achievements.append("💰 In the Green: overall profit is positive.")
+    if profit > 500:
+        achievements.append("💎 Cash Flow: profit over 500.")
+
+    # Feed & management
+    if feed_kg >= 100:
+        achievements.append("🌾 Feed Master: logged 100+ kg of feed.")
+    if rabbits >= 20:
+        achievements.append("📦 Busy Farm: 20+ rabbits in database.")
+
+    if not achievements:
+        achievements.append("No achievements yet – start logging litters, weights, and sales to unlock badges!")
+
+    return achievements
+
+
+def get_climate_warning_message():
+    """Return a message about heat/cold risk based on last set temperature."""
+    val = get_setting("last_temp_c")
+    if val is None:
+        return (
+            "No temperature data yet.\n"
+            "Use /settemp C to log current temperature (example: /settemp 32)."
+        )
+    try:
+        t = float(val)
+    except ValueError:
+        return "Stored temperature is invalid. Set again with /settemp C."
+
+    lines = [f"Last recorded temperature: {t:.1f}°C"]
+
+    if t >= 32:
+        lines.append("🔥 High heat stress risk! Make sure there is shade, ventilation, and plenty of water.")
+    elif 28 <= t < 32:
+        lines.append("🌡 Warm conditions. Watch for heat stress; avoid heavy handling or transport.")
+    elif 10 <= t < 28:
+        lines.append("✅ Comfortable zone for most rabbits.")
+    elif 0 <= t < 10:
+        lines.append("❄️ Cool weather. Ensure dry bedding and protection from drafts.")
+    else:  # t < 0
+        lines.append("🥶 Cold stress risk! Add extra bedding, block drafts, and check water isn't frozen.")
+
+    return "\n".join(lines)
+
+
+def get_climate_warning_short():
+    """Short one-line warning for daily summary."""
+    val = get_setting("last_temp_c")
+    if val is None:
+        return None
+    try:
+        t = float(val)
+    except ValueError:
+        return None
+
+    if t >= 32:
+        return f"{t:.1f}°C – 🔥 High heat stress risk."
+    if 28 <= t < 32:
+        return f"{t:.1f}°C – 🌡 Warm, watch for heat stress."
+    if 10 <= t < 28:
+        return f"{t:.1f}°C – ✅ Comfortable zone."
+    if 0 <= t < 10:
+        return f"{t:.1f}°C – ❄️ Cool, protect from drafts."
+    return f"{t:.1f}°C – 🥶 Cold stress risk – add bedding."
+
+
 # ================== TELEGRAM HANDLERS ==================
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1002,6 +1474,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\nBreeding & litters:\n"
         "/breed DOE BUCK\n"
         "/forcebreed DOE BUCK  (ignore inbreeding warning)\n"
+        "/suggestbreed\n"
         "/kindling DOE LITTER_SIZE [LITTERNAME]\n"
         "/litters DOE\n"
         "/littername DOE LITTERNAME\n"
@@ -1013,6 +1486,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/healthlog NAME\n"
         "/weight NAME KG\n"
         "/weightlog NAME\n"
+        "/growth NAME\n"
+        "/growthchart NAME\n"
         "\nMoney & feed:\n"
         "/sell NAME PRICE [BUYER]\n"
         "/expense AMOUNT CATEGORY [NOTE]\n"
@@ -1032,7 +1507,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/stats\n"
         "/farmsummary\n"
         "/tree NAME\n"
-        "/growth NAME\n"
+        "/lineperformance NAME\n"
+        "/keep NAME\n"
+        "\nClimate:\n"
+        "/settemp C   (example: /settemp 32)\n"
+        "/climatealert\n"
         "\nPhotos:\n"
         "Send a photo with caption = NAME to assign it\n"
         "/photo NAME (show stored photo)\n"
@@ -1042,6 +1521,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/export_sales\n"
         "/export_expenses\n"
         "/backupdb\n"
+        "\nGamified:\n"
+        "/achievements\n"
         "\nAutomation:\n"
         "/subscribe\n"
         "/unsubscribe"
@@ -1142,30 +1623,43 @@ async def breed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     doe, buck = parts[1], parts[2]
 
-    # Inbreeding warning first
-    warning = checkpair_inbreeding(doe, buck)
-    if warning.startswith("⚠️") or "Same rabbit" in warning:
+    severity, warning = assess_inbreeding(doe, buck)
+    if severity == "error":
+        await update.message.reply_text(warning)
+        return
+    if severity == "danger":
         await update.message.reply_text(
             warning
-            + "\n\n❗ Breeding blocked.\n"
-              "If you still want to do this breeding, use:\n"
+            + "\n\n❗ Dangerous inbreeding. Breeding blocked.\n"
+              "If you still really want this, use:\n"
               f"/forcebreed {doe} {buck}"
         )
         return
+    elif severity == "warning":
+        await update.message.reply_text(warning)
 
     msg = add_breeding(doe, buck)
     await update.message.reply_text(msg)
 
 
 async def forcebreed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Same as /breed but ignores inbreeding warnings."""
+    """Same as /breed but ignores inbreeding warnings (still blocks errors)."""
     parts = update.message.text.split()
     if len(parts) < 3:
         await update.message.reply_text("Usage: /forcebreed DOE BUCK")
         return
     doe, buck = parts[1], parts[2]
+
+    severity, warning = assess_inbreeding(doe, buck)
+    if severity == "error":
+        await update.message.reply_text(warning)
+        return
+
     msg = add_breeding(doe, buck)
-    await update.message.reply_text("⚠️ Forced breeding:\n" + msg)
+    if severity in ("danger", "warning"):
+        await update.message.reply_text("⚠️ Forced breeding despite relation:\n" + warning + "\n\n" + msg)
+    else:
+        await update.message.reply_text("⚠️ Forced breeding (no close relation detected):\n" + msg)
 
 
 async def kindling_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1264,6 +1758,26 @@ async def weaning_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🐇 Weaning today for:\n" + "\n".join(lines))
 
 
+async def suggestbreed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pairs = suggest_breeding_pairs(limit=5)
+    if not pairs:
+        await update.message.reply_text(
+            "No suggested pairs.\nMake sure you have active does and bucks, and some breeding data."
+        )
+        return
+
+    lines = ["🧠 Suggested breeding pairs (best first):"]
+    for score, doe, buck, severity in pairs:
+        rel = {
+            "none": "no close relation",
+            "warning": "cousin-level relation",
+            "danger": "danger (should be blocked)",
+        }.get(severity, severity)
+        lines.append(f"- {doe} × {buck}  | score {score:.1f} | {rel}")
+    lines.append("\nScore considers: inbreeding safety, doe litter history, growth, and buck offspring count.")
+    await update.message.reply_text("\n".join(lines))
+
+
 # ---- Health & weights ----
 
 async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1322,6 +1836,26 @@ async def weightlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     lines = [f"{r['weigh_date']}: {r['weight_kg']} kg" for r in rows]
     await update.message.reply_text(f"⚖️ Weight log for {rabbit['name']}:\n" + "\n".join(lines))
+
+
+async def growth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    parts = update.message.text.split()
+    if len(parts) < 2:
+        await update.message.reply_text("Usage: /growth NAME")
+        return
+    name = parts[1]
+    msg = compute_growth_message(name)
+    await update.message.reply_text(msg)
+
+
+async def growthchart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    parts = update.message.text.split()
+    if len(parts) < 2:
+        await update.message.reply_text("Usage: /growthchart NAME")
+        return
+    name = parts[1]
+    msg = build_growth_chart_ascii(name)
+    await update.message.reply_text(msg)
 
 
 # ---- Money & feed ----
@@ -1596,13 +2130,46 @@ async def tree_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-async def growth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def lineperformance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = update.message.text.split()
     if len(parts) < 2:
-        await update.message.reply_text("Usage: /growth NAME")
+        await update.message.reply_text("Usage: /lineperformance NAME")
         return
     name = parts[1]
-    msg = compute_growth_message(name)
+    msg = get_line_performance_message(name)
+    await update.message.reply_text(msg)
+
+
+async def keep_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    parts = update.message.text.split()
+    if len(parts) < 2:
+        await update.message.reply_text("Usage: /keep NAME")
+        return
+    name = parts[1]
+    msg = decide_keep_or_sell(name)
+    await update.message.reply_text(msg)
+
+
+# ---- Climate ----
+
+async def settemp_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    parts = update.message.text.split()
+    if len(parts) < 2:
+        await update.message.reply_text("Usage: /settemp C\nExample: /settemp 32")
+        return
+    try:
+        t = float(parts[1])
+    except ValueError:
+        await update.message.reply_text("Temperature must be a number, in °C.")
+        return
+    set_setting("last_temp_c", str(t))
+    await update.message.reply_text(
+        f"✅ Temperature set to {t:.1f}°C.\nUse /climatealert to see heat/cold risk."
+    )
+
+
+async def climatealert_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = get_climate_warning_message()
     await update.message.reply_text(msg)
 
 
@@ -1653,6 +2220,13 @@ async def photo_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(msg)
 
 
+# ---- Gamified achievements ----
+
+async def achievements_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    achievements = compute_achievements()
+    await update.message.reply_text("🏅 Achievements:\n" + "\n".join(achievements))
+
+
 # ---- Subscribe / Unsubscribe (daily summary) ----
 
 async def daily_job(context: ContextTypes.DEFAULT_TYPE):
@@ -1686,6 +2260,11 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE):
             lines.append(line)
     else:
         lines.append("\nNo tasks for today.")
+
+    climate_short = get_climate_warning_short()
+    if climate_short:
+        lines.append("\n🌡 Climate alert:")
+        lines.append(climate_short)
 
     try:
         await context.bot.send_message(chat_id=chat_id, text="\n".join(lines))
@@ -1782,12 +2361,15 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("nextdue", nextdue_cmd))
     app.add_handler(CommandHandler("today", today_cmd))
     app.add_handler(CommandHandler("weaning", weaning_cmd))
+    app.add_handler(CommandHandler("suggestbreed", suggestbreed_cmd))
 
     # Health & weights
     app.add_handler(CommandHandler("health", health_cmd))
     app.add_handler(CommandHandler("healthlog", healthlog_cmd))
     app.add_handler(CommandHandler("weight", weight_cmd))
     app.add_handler(CommandHandler("weightlog", weightlog_cmd))
+    app.add_handler(CommandHandler("growth", growth_cmd))
+    app.add_handler(CommandHandler("growthchart", growthchart_cmd))
 
     # Money & feed
     app.add_handler(CommandHandler("sell", sell_cmd))
@@ -1817,11 +2399,19 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("farmsummary", farmsummary_cmd))
     app.add_handler(CommandHandler("tree", tree_cmd))
-    app.add_handler(CommandHandler("growth", growth_cmd))
+    app.add_handler(CommandHandler("lineperformance", lineperformance_cmd))
+    app.add_handler(CommandHandler("keep", keep_cmd))
+
+    # Climate
+    app.add_handler(CommandHandler("settemp", settemp_cmd))
+    app.add_handler(CommandHandler("climatealert", climatealert_cmd))
 
     # Photos
     app.add_handler(CommandHandler("photo", photo_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, photo_upload_handler))
+
+    # Gamified
+    app.add_handler(CommandHandler("achievements", achievements_cmd))
 
     # Subscribe
     app.add_handler(CommandHandler("subscribe", subscribe_cmd))
