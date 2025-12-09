@@ -1,13 +1,12 @@
 import logging
 import sqlite3
-import asyncio
 from datetime import date, timedelta
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ================== CONFIG ==================
-BOT_TOKEN = "8567471850:AAG9wNB58cdE4NbtETziziGaOlvsiLmd3Ng"  # <<< put your real token here
+BOT_TOKEN = "8567471850:AAG9wNB58cdE4NbtETziziGaOlvsiLmd3Ng"  # <<< PUT YOUR REAL TOKEN HERE
 DB_FILE = "rabbits.db"
 
 GESTATION_DAYS = 31
@@ -26,6 +25,7 @@ def safe_alter(cur, sql):
     try:
         cur.execute(sql)
     except sqlite3.OperationalError:
+        # column already exists
         pass
 
 
@@ -192,11 +192,13 @@ def update_rabbit_parents(child_name, mother_name, father_name):
         return "❌ Child not found."
     if not mother or not father:
         return "❌ Mother or father not found."
+
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
-        UPDATE rabbits SET mother_id=?, father_id=? WHERE id=?
-    """, (mother["id"], father["id"], child["id"]))
+    cur.execute(
+        "UPDATE rabbits SET mother_id=?, father_id=? WHERE id=?",
+        (mother["id"], father["id"], child["id"]),
+    )
     conn.commit()
     conn.close()
     return f"✅ Parents set for {child_name}: mother {mother_name}, father {father_name}."
@@ -208,12 +210,16 @@ def set_cage_section(name, cage, section=None):
         return "❌ Rabbit not found."
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
-        UPDATE rabbits SET cage=?, section=? WHERE id=?
-    """, (cage, section, r["id"]))
+    cur.execute(
+        "UPDATE rabbits SET cage=?, section=? WHERE id=?",
+        (cage, section, r["id"]),
+    )
     conn.commit()
     conn.close()
-    return f"✅ {name} assigned to cage {cage}" + (f", section {section}." if section else ".")
+    msg = f"✅ {name} assigned to cage {cage}"
+    if section:
+        msg += f", section {section}"
+    return msg + "."
 
 
 def mark_dead(name, reason=None):
@@ -223,12 +229,20 @@ def mark_dead(name, reason=None):
     today_str = date.today().strftime("%Y-%m-%d")
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
-        UPDATE rabbits SET status='dead', death_date=?, death_reason=? WHERE id=?
-    """, (today_str, reason, r["id"]))
+    cur.execute(
+        """
+        UPDATE rabbits
+        SET status='dead', death_date=?, death_reason=?
+        WHERE id=?
+        """,
+        (today_str, reason, r["id"]),
+    )
     conn.commit()
     conn.close()
-    return f"☠️ {name} marked as dead." + (f" Reason: {reason}" if reason else "")
+    msg = f"☠️ {name} marked as dead."
+    if reason:
+        msg += f" Reason: {reason}"
+    return msg
 
 
 def checkpair_inbreeding(name1, name2):
@@ -237,7 +251,7 @@ def checkpair_inbreeding(name1, name2):
     if not r1 or not r2:
         return "❌ One or both rabbits not found."
     if r1["id"] == r2["id"]:
-        return "❌ Same rabbit. Cannot breed."
+        return "❌ Same rabbit, cannot breed."
 
     parents1 = set(x for x in [r1["mother_id"], r1["father_id"]] if x)
     parents2 = set(x for x in [r2["mother_id"], r2["father_id"]] if x)
@@ -250,7 +264,7 @@ def checkpair_inbreeding(name1, name2):
     common_parents = parents1 & parents2
     if common_parents:
         names = [get_rabbit_by_id(pid)["name"] for pid in common_parents]
-        return f"⚠️ Close relation: share parent(s) {', '.join(names)}."
+        return f"⚠️ Close relation: shared parent(s): {', '.join(names)}."
 
     # grandparents
     def get_parents_ids(r):
@@ -271,7 +285,7 @@ def checkpair_inbreeding(name1, name2):
     common_gp = gp1 & gp2
     if common_gp:
         names = [get_rabbit_by_id(gid)["name"] for gid in common_gp]
-        return f"⚠️ Related: share grandparent(s) {', '.join(names)}."
+        return f"⚠️ Related: shared grandparent(s): {', '.join(names)}."
 
     return "✅ No close relation found (up to parents & grandparents)."
 
@@ -293,16 +307,17 @@ def add_breeding(doe_name, buck_name):
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO breedings(doe_id, buck_id, mating_date, expected_due_date)
         VALUES (?, ?, ?, ?)
-    """, (doe["id"], buck["id"],
-          mating.strftime("%Y-%m-%d"),
-          due.strftime("%Y-%m-%d")))
+        """,
+        (doe["id"], buck["id"], mating.strftime("%Y-%m-%d"), due.strftime("%Y-%m-%d")),
+    )
     conn.commit()
     conn.close()
 
-    return f"✅ {doe_name} bred with {buck_name}\nDue: {due}"
+    return f"✅ {doe_name} bred with {buck_name}\nDue date: {due}"
 
 
 def record_kindling(doe_name, litter_size, litter_name=None):
@@ -312,45 +327,58 @@ def record_kindling(doe_name, litter_size, litter_name=None):
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT * FROM breedings
         WHERE doe_id=? AND kindling_date IS NULL
         ORDER BY DATE(mating_date) DESC
         LIMIT 1
-    """, (doe["id"],))
+        """,
+        (doe["id"],),
+    )
     breeding = cur.fetchone()
 
     if not breeding:
         conn.close()
-        return "❌ No open breeding found."
+        return "❌ No open breeding found for this doe."
 
     kindling = date.today()
     weaning = kindling + timedelta(days=WEANING_DAYS)
 
     if litter_name:
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE breedings
             SET kindling_date=?, litter_size=?, weaning_date=?, litter_name=?
             WHERE id=?
-        """, (kindling.strftime("%Y-%m-%d"),
-              litter_size,
-              weaning.strftime("%Y-%m-%d"),
-              litter_name,
-              breeding["id"]))
+            """,
+            (
+                kindling.strftime("%Y-%m-%d"),
+                litter_size,
+                weaning.strftime("%Y-%m-%d"),
+                litter_name,
+                breeding["id"],
+            ),
+        )
     else:
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE breedings
             SET kindling_date=?, litter_size=?, weaning_date=?
             WHERE id=?
-        """, (kindling.strftime("%Y-%m-%d"),
-              litter_size,
-              weaning.strftime("%Y-%m-%d"),
-              breeding["id"]))
+            """,
+            (
+                kindling.strftime("%Y-%m-%d"),
+                litter_size,
+                weaning.strftime("%Y-%m-%d"),
+                breeding["id"],
+            ),
+        )
 
     conn.commit()
     conn.close()
 
-    msg = f"🍼 Kindling recorded for {doe_name}\nLitter: {litter_size}\nWeaning: {weaning}"
+    msg = f"🍼 Kindling recorded for {doe_name}\nKits: {litter_size}\nWeaning date: {weaning}"
     if litter_name:
         msg += f"\nLitter name: {litter_name}"
     return msg
@@ -360,12 +388,15 @@ def get_due_today():
     today = date.today().strftime("%Y-%m-%d")
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT r.name
         FROM breedings b
         JOIN rabbits r ON r.id=b.doe_id
         WHERE b.expected_due_date=?
-    """, (today,))
+        """,
+        (today,),
+    )
     rows = cur.fetchall()
     conn.close()
     return rows
@@ -375,12 +406,15 @@ def get_weaning_today():
     today = date.today().strftime("%Y-%m-%d")
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT r.name
         FROM breedings b
         JOIN rabbits r ON r.id=b.doe_id
         WHERE b.weaning_date=?
-    """, (today,))
+        """,
+        (today,),
+    )
     rows = cur.fetchall()
     conn.close()
     return rows
@@ -393,8 +427,9 @@ def get_litters_for_doe(doe_name):
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
-        SELECT 
+    cur.execute(
+        """
+        SELECT
             b.mating_date,
             b.kindling_date,
             b.litter_size,
@@ -404,7 +439,9 @@ def get_litters_for_doe(doe_name):
         JOIN rabbits rbuck ON rbuck.id = b.buck_id
         WHERE b.doe_id = ? AND b.kindling_date IS NOT NULL
         ORDER BY DATE(b.kindling_date) DESC, DATE(b.mating_date) DESC
-    """, (doe["id"],))
+        """,
+        (doe["id"],),
+    )
     rows = cur.fetchall()
     conn.close()
     return doe, rows
@@ -417,36 +454,43 @@ def set_litter_name_for_latest(doe_name, litter_name):
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT id FROM breedings
         WHERE doe_id = ? AND kindling_date IS NOT NULL
         ORDER BY DATE(kindling_date) DESC, DATE(mating_date) DESC
         LIMIT 1
-    """, (doe["id"],))
+        """,
+        (doe["id"],),
+    )
     row = cur.fetchone()
 
     if not row:
         conn.close()
-        return "❌ No litter found for that doe (record kindling first)."
+        return "❌ No litters found for this doe."
 
     cur.execute("UPDATE breedings SET litter_name=? WHERE id=?", (litter_name, row["id"]))
     conn.commit()
     conn.close()
-    return f"✅ Litter name '{litter_name}' set for {doe_name}."
+    return f"✅ Litter name for {doe_name}'s last litter set to: {litter_name}."
 
 
 def get_next_due_for_doe(doe_name):
     doe = get_rabbit(doe_name)
     if not doe:
         return None
+
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT * FROM breedings
         WHERE doe_id=? AND kindling_date IS NULL
         ORDER BY DATE(expected_due_date) ASC
         LIMIT 1
-    """, (doe["id"],))
+        """,
+        (doe["id"],),
+    )
     row = cur.fetchone()
     conn.close()
     return row
@@ -461,10 +505,13 @@ def add_health_record(name, note):
     today_str = date.today().strftime("%Y-%m-%d")
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO health_records(rabbit_id, record_date, note)
         VALUES (?, ?, ?)
-    """, (rabbit["id"], today_str, note))
+        """,
+        (rabbit["id"], today_str, note),
+    )
     conn.commit()
     conn.close()
     return f"✅ Health note added for {name}."
@@ -476,13 +523,16 @@ def get_health_log(name, limit=5):
         return None, []
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT record_date, note
         FROM health_records
         WHERE rabbit_id = ?
         ORDER BY record_date DESC, id DESC
         LIMIT ?
-    """, (rabbit["id"], limit))
+        """,
+        (rabbit["id"], limit),
+    )
     rows = cur.fetchall()
     conn.close()
     return rabbit, rows
@@ -496,10 +546,13 @@ def record_sale(name, price, buyer):
     today_str = date.today().strftime("%Y-%m-%d")
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO sales(rabbit_id, sale_date, price, buyer)
         VALUES (?, ?, ?, ?)
-    """, (rabbit["id"], today_str, price, buyer))
+        """,
+        (rabbit["id"], today_str, price, buyer),
+    )
     cur.execute("UPDATE rabbits SET status='sold' WHERE id=?", (rabbit["id"],))
     conn.commit()
     conn.close()
@@ -509,7 +562,7 @@ def record_sale(name, price, buyer):
         extra += f" for {price}"
     if buyer:
         extra += f" to {buyer}"
-    return f"💸 Sale recorded for {name}{extra}."
+    return f"💸 Sale recorded: {name}{extra}."
 
 
 def add_weight(name, weight_kg):
@@ -519,13 +572,16 @@ def add_weight(name, weight_kg):
     today_str = date.today().strftime("%Y-%m-%d")
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO weights(rabbit_id, weigh_date, weight_kg)
         VALUES (?, ?, ?)
-    """, (rabbit["id"], today_str, weight_kg))
+        """,
+        (rabbit["id"], today_str, weight_kg),
+    )
     conn.commit()
     conn.close()
-    return f"✅ Recorded weight {weight_kg} kg for {name}."
+    return f"✅ Weight recorded for {name}: {weight_kg} kg."
 
 
 def get_weight_log(name, limit=5):
@@ -534,13 +590,16 @@ def get_weight_log(name, limit=5):
         return None, []
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT weigh_date, weight_kg
         FROM weights
         WHERE rabbit_id = ?
         ORDER BY weigh_date DESC, id DESC
         LIMIT ?
-    """, (rabbit["id"], limit))
+        """,
+        (rabbit["id"], limit),
+    )
     rows = cur.fetchall()
     conn.close()
     return rabbit, rows
@@ -552,10 +611,13 @@ def add_expense(amount, category, note=None):
     today_str = date.today().strftime("%Y-%m-%d")
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO expenses(exp_date, category, amount, note)
         VALUES (?, ?, ?, ?)
-    """, (today_str, category, amount, note))
+        """,
+        (today_str, category, amount, note),
+    )
     conn.commit()
     conn.close()
     return f"✅ Expense recorded: {amount} ({category})."
@@ -565,16 +627,25 @@ def add_feed(amount_kg, cost, note=None):
     today_str = date.today().strftime("%Y-%m-%d")
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO feed_logs(log_date, amount_kg, cost, note)
         VALUES (?, ?, ?, ?)
-    """, (today_str, amount_kg, cost, note))
+        """,
+        (today_str, amount_kg, cost, note),
+    )
     conn.commit()
     conn.close()
     return f"✅ Feed log: {amount_kg} kg, cost {cost}."
 
 
 def get_profit_summary(period=None):
+    """
+    period:
+      None       -> all time
+      'YYYY-MM'  -> month
+      'YYYY'     -> year
+    """
     conn = get_db()
     cur = conn.cursor()
 
@@ -585,23 +656,29 @@ def get_profit_summary(period=None):
 
     if period is None:
         pass
-    elif len(period) == 7 and period[4] == "-":
+    elif len(period) == 7 and period[4] == "-":  # YYYY-MM
         sales_where = "WHERE sale_date LIKE ?"
         exp_where = "WHERE exp_date LIKE ?"
         like = period + "%"
         params_sales = [like]
         params_exp = [like]
-    elif len(period) == 4 and period.isdigit():
+    elif len(period) == 4 and period.isdigit():  # YYYY
         sales_where = "WHERE sale_date LIKE ?"
         exp_where = "WHERE exp_date LIKE ?"
         like = period + "%"
         params_sales = [like]
         params_exp = [like]
 
-    cur.execute(f"SELECT COALESCE(SUM(price),0) AS s FROM sales {sales_where}", params_sales)
+    cur.execute(
+        f"SELECT COALESCE(SUM(price),0) AS s FROM sales {sales_where}",
+        params_sales,
+    )
     income = cur.fetchone()["s"]
 
-    cur.execute(f"SELECT COALESCE(SUM(amount),0) AS e FROM expenses {exp_where}", params_exp)
+    cur.execute(
+        f"SELECT COALESCE(SUM(amount),0) AS e FROM expenses {exp_where}",
+        params_exp,
+    )
     expenses = cur.fetchone()["e"]
 
     conn.close()
@@ -617,17 +694,21 @@ def get_feed_stats(period=None):
 
     if period is None:
         pass
-    elif len(period) == 7 and period[4] == "-":
+    elif len(period) == 7 and period[4] == "-":  # YYYY-MM
         where = "WHERE log_date LIKE ?"
         params = [period + "%"]
-    elif len(period) == 4 and period.isdigit():
+    elif len(period) == 4 and period.isdigit():  # YYYY
         where = "WHERE log_date LIKE ?"
         params = [period + "%"]
 
-    cur.execute(f"""
-        SELECT COALESCE(SUM(amount_kg),0) AS kg, COALESCE(SUM(cost),0) AS c
+    cur.execute(
+        f"""
+        SELECT COALESCE(SUM(amount_kg),0) AS kg,
+               COALESCE(SUM(cost),0)      AS c
         FROM feed_logs {where}
-    """, params)
+        """,
+        params,
+    )
     row = cur.fetchone()
     conn.close()
     return row["kg"], row["c"]
@@ -638,10 +719,13 @@ def get_feed_stats(period=None):
 def add_task(task_date_str, title, note=None):
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO tasks(task_date, title, note)
         VALUES (?, ?, ?)
-    """, (task_date_str, title, note))
+        """,
+        (task_date_str, title, note),
+    )
     conn.commit()
     conn.close()
     return "✅ Task added."
@@ -651,11 +735,14 @@ def get_tasks_for_date(d):
     ds = d.strftime("%Y-%m-%d")
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT * FROM tasks
         WHERE task_date=? AND done=0
         ORDER BY id
-    """, (ds,))
+        """,
+        (ds,),
+    )
     rows = cur.fetchall()
     conn.close()
     return rows
@@ -665,12 +752,15 @@ def get_upcoming_tasks(limit=10):
     today_str = date.today().strftime("%Y-%m-%d")
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT * FROM tasks
         WHERE task_date>=? AND done=0
         ORDER BY task_date, id
         LIMIT ?
-    """, (today_str, limit))
+        """,
+        (today_str, limit),
+    )
     rows = cur.fetchall()
     conn.close()
     return rows
@@ -710,7 +800,10 @@ def get_stats_message():
     cur.execute("SELECT COUNT(*) AS c FROM breedings WHERE kindling_date IS NOT NULL")
     total_litters = cur.fetchone()["c"]
 
-    cur.execute("SELECT COALESCE(SUM(litter_size), 0) AS s FROM breedings WHERE litter_size IS NOT NULL")
+    cur.execute(
+        "SELECT COALESCE(SUM(litter_size), 0) AS s "
+        "FROM breedings WHERE litter_size IS NOT NULL"
+    )
     total_kits = cur.fetchone()["s"]
 
     cur.execute("SELECT COUNT(*) AS c FROM sales")
@@ -719,10 +812,15 @@ def get_stats_message():
     conn.close()
 
     msg = "📊 Farm stats:\n"
-    msg += f"- Rabbits: {total_rabbits} (Active: {active_rabbits}, Does: {total_does}, Bucks: {total_bucks})\n"
+    msg += (
+        f"- Rabbits: {total_rabbits} "
+        f"(Active: {active_rabbits}, Does: {total_does}, Bucks: {total_bucks})\n"
+    )
     msg += f"- Breedings: {total_breedings}\n"
     msg += f"- Litters recorded: {total_litters}\n"
-    msg += f"- Kits recorded: {int(total_kits) if total_kits is not None else 0}\n"
+    msg += (
+        f"- Kits recorded: {int(total_kits) if total_kits is not None else 0}\n"
+    )
     msg += f"- Sales recorded: {total_sales}\n"
     return msg
 
@@ -732,7 +830,7 @@ def get_info_message(name):
     if not r:
         return "❌ Rabbit not found."
 
-    lines = [f"🐰 {r['name']} ({r['sex']})"]
+    lines = [f"🐰 {r['name']} ({'Doe' if r['sex']=='F' else 'Buck'})"]
 
     # status
     lines.append(f"Status: {r['status'] or 'unknown'}")
@@ -742,7 +840,7 @@ def get_info_message(name):
         if r["death_reason"]:
             lines.append(f"  Reason: {r['death_reason']}")
 
-    # cage / section
+    # location
     if r["cage"] or r["section"]:
         loc = []
         if r["cage"]:
@@ -763,20 +861,26 @@ def get_info_message(name):
     if r["sex"] == "F":
         conn = get_db()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT COUNT(*) AS c, COALESCE(SUM(litter_size),0) AS s
             FROM breedings
             WHERE doe_id=? AND kindling_date IS NOT NULL
-        """, (r["id"],))
+            """,
+            (r["id"],),
+        )
         row = cur.fetchone()
         litters = row["c"]
         kits = int(row["s"])
-        cur.execute("""
+        cur.execute(
+            """
             SELECT * FROM breedings
             WHERE doe_id=? AND kindling_date IS NOT NULL
             ORDER BY DATE(kindling_date) DESC
             LIMIT 1
-        """, (r["id"],))
+            """,
+            (r["id"],),
+        )
         last = cur.fetchone()
         conn.close()
 
@@ -791,27 +895,37 @@ def get_info_message(name):
         # next due
         nxt = get_next_due_for_doe(name)
         if nxt:
-            lines.append(f"Next due: {nxt['expected_due_date']} (bred on {nxt['mating_date']})")
+            lines.append(
+                f"Next due: {nxt['expected_due_date']} "
+                f"(bred on {nxt['mating_date']})"
+            )
 
-    # health
+    # latest health
     rabbit, h_records = get_health_log(name, limit=1)
     if rabbit and h_records:
-        lines.append(f"Last health: {h_records[0]['record_date']} – {h_records[0]['note']}")
+        lines.append(
+            f"Last health note: {h_records[0]['record_date']} – "
+            f"{h_records[0]['note']}"
+        )
 
-    # last sale
+    # latest sale
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT * FROM sales
         WHERE rabbit_id=?
         ORDER BY sale_date DESC, id DESC
         LIMIT 1
-    """, (r["id"],))
+        """,
+        (r["id"],),
+    )
     s = cur.fetchone()
     conn.close()
     if s:
         lines.append(
-            f"Last sale: {s['sale_date']} for {s['price']} to {s['buyer'] or 'unknown buyer'}"
+            f"Last sale: {s['sale_date']} for {s['price']} "
+            f"to {s['buyer'] or 'unknown buyer'}"
         )
 
     return "\n".join(lines)
@@ -819,7 +933,6 @@ def get_info_message(name):
 
 def get_farmsummary_message():
     stats = get_stats_message()
-
     income_all, exp_all, prof_all = get_profit_summary(period=None)
     feed_kg, feed_cost = get_feed_stats(period=None)
 
@@ -831,7 +944,6 @@ def get_farmsummary_message():
     msg += "\n🌾 Feed (all time):\n"
     msg += f"- Total feed: {feed_kg} kg\n"
     msg += f"- Feed cost: {feed_cost}\n"
-
     return msg
 
 
@@ -843,7 +955,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Rabbits:\n"
         "/addrabbit NAME M/F\n"
         "/rabbits – list all\n"
-        "/active – active rabbits\n"
+        "/active – list active\n"
         "/setcage NAME CAGE [SECTION]\n"
         "/setparents CHILD MOTHER FATHER\n"
         "/checkpair R1 R2 – inbreeding check\n"
@@ -854,10 +966,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/litters DOE\n"
         "/littername DOE LITTERNAME\n"
         "/nextdue DOE\n"
-        "/today – due + weaning\n"
-        "/weaning\n"
+        "/today – due + weaning + tasks\n"
+        "/weaning – weaning today\n"
         "\nHealth & weights:\n"
-        "/health NAME note...\n"
+        "/health NAME NOTE\n"
         "/healthlog NAME\n"
         "/weight NAME KG\n"
         "/weightlog NAME\n"
@@ -879,10 +991,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/info NAME\n"
         "/stats\n"
         "/farmsummary\n"
-        "/subscribe – daily summary\n"
-        "/unsubscribe"
+        "\nNotifications:\n"
+        "/subscribe – daily summary ON\n"
+        "/unsubscribe – daily summary OFF"
     )
 
+
+# --- core commands ---
 
 async def addrabbit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
@@ -890,23 +1005,23 @@ async def addrabbit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     name = context.args[0]
     sex = context.args[1].upper()
-    if sex not in ["M", "F"]:
+    if sex not in ("M", "F"):
         await update.message.reply_text("Sex must be M or F.")
         return
     if add_rabbit(name, sex):
         await update.message.reply_text("✅ Rabbit added.")
     else:
-        await update.message.reply_text("⚠️ Rabbit already exists.")
+        await update.message.reply_text("⚠️ Rabbit with that name already exists.")
 
 
 async def rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rabbits = list_rabbits(active_only=False)
     if not rabbits:
-        await update.message.reply_text("No rabbits yet.")
+        await update.message.reply_text("No rabbits recorded yet.")
         return
     msg = "🐇 Rabbits:\n"
     for r in rabbits:
-        msg += f"- {r['name']} ({r['sex']}, {r['status'] or 'unknown'})\n"
+        msg += f"- {r['name']} ({'Doe' if r['sex']=='F' else 'Buck'}, {r['status']})\n"
     await update.message.reply_text(msg)
 
 
@@ -917,7 +1032,7 @@ async def active_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = "🐇 Active rabbits:\n"
     for r in rabbits:
-        msg += f"- {r['name']} ({r['sex']})\n"
+        msg += f"- {r['name']} ({'Doe' if r['sex']=='F' else 'Buck'})\n"
     await update.message.reply_text(msg)
 
 
@@ -959,28 +1074,28 @@ async def markdead_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
+# --- breeding / litters ---
+
 async def breed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /breed Bella Max")
+        await update.message.reply_text("Usage: /breed DoeName BuckName")
         return
-    doe = context.args[0]
-    buck = context.args[1]
-    msg = add_breeding(doe, buck)
+    msg = add_breeding(context.args[0], context.args[1])
     await update.message.reply_text(msg)
 
 
 async def kindling_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /kindling Bella 8 [LitterName]")
+        await update.message.reply_text("Usage: /kindling DoeName LitterSize [LitterName]")
         return
-    doe = context.args[0]
+    doe_name = context.args[0]
     try:
-        litter = int(context.args[1])
+        count = int(context.args[1])
     except ValueError:
-        await update.message.reply_text("Litter size must be a number, e.g. /kindling Bella 8")
+        await update.message.reply_text("LitterSize must be a number.")
         return
     litter_name = context.args[2] if len(context.args) >= 3 else None
-    msg = record_kindling(doe, litter, litter_name)
+    msg = record_kindling(doe_name, count, litter_name)
     await update.message.reply_text(msg)
 
 
@@ -988,9 +1103,10 @@ async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     due = get_due_today()
     weaning = get_weaning_today()
     tasks = get_tasks_for_date(date.today())
-    msg = "📅 Today's Tasks:\n"
+
+    msg = "📅 Today's overview:\n"
     if due:
-        msg += "\n🍼 Due today:\n"
+        msg += "\n🍼 Does due today:\n"
         for r in due:
             msg += f"- {r['name']}\n"
     if weaning:
@@ -998,18 +1114,18 @@ async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for r in weaning:
             msg += f"- {r['name']}\n"
     if tasks:
-        msg += "\n🧹 Other tasks:\n"
+        msg += "\n🧹 Tasks:\n"
         for t in tasks:
-            msg += f"- #{t['id']} {t['title']}\n"
+            msg += f"- #{t['id']} {t['task_date']}: {t['title']}\n"
     if not due and not weaning and not tasks:
-        msg += "No tasks today 🐰"
+        msg += "Nothing scheduled today 🐰"
     await update.message.reply_text(msg)
 
 
 async def weaning_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = get_weaning_today()
     if not rows:
-        await update.message.reply_text("No weaning today.")
+        await update.message.reply_text("No litters to wean today.")
         return
     msg = "🚼 Weaning today:\n"
     for r in rows:
@@ -1019,7 +1135,7 @@ async def weaning_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def litters_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
-        await update.message.reply_text("Usage: /litters Bella")
+        await update.message.reply_text("Usage: /litters DoeName")
         return
     doe_name = context.args[0]
     doe, rows = get_litters_for_doe(doe_name)
@@ -1027,13 +1143,13 @@ async def litters_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Doe not found.")
         return
     if not rows:
-        await update.message.reply_text(f"No litters recorded yet for {doe_name}.")
+        await update.message.reply_text(f"No litters recorded for {doe_name}.")
         return
     msg = f"🧺 Litters for {doe_name}:\n"
     for r in rows:
         name = r["litter_name"] if r["litter_name"] else "(no name)"
         msg += (
-            f"- {name}: bred with {r['buck_name']}, "
+            f"- {name}: buck {r['buck_name']}, "
             f"mated {r['mating_date']}, kindled {r['kindling_date']}, "
             f"{r['litter_size']} kits\n"
         )
@@ -1042,17 +1158,33 @@ async def litters_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def littername_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /littername Bella BM1")
+        await update.message.reply_text("Usage: /littername DoeName LitterName")
         return
-    doe_name = context.args[0]
-    litter_name = context.args[1]
-    msg = set_litter_name_for_latest(doe_name, litter_name)
+    msg = set_litter_name_for_latest(context.args[0], context.args[1])
     await update.message.reply_text(msg)
 
 
+async def nextdue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 1:
+        await update.message.reply_text("Usage: /nextdue DoeName")
+        return
+    doe_name = context.args[0]
+    nxt = get_next_due_for_doe(doe_name)
+    if not nxt:
+        await update.message.reply_text(f"No open breedings found for {doe_name}.")
+        return
+    msg = (
+        f"{doe_name} is due on {nxt['expected_due_date']} "
+        f"(bred on {nxt['mating_date']})."
+    )
+    await update.message.reply_text(msg)
+
+
+# --- health / weights ---
+
 async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /health NAME note...")
+        await update.message.reply_text("Usage: /health Name note...")
         return
     name = context.args[0]
     note = " ".join(context.args[1:])
@@ -1062,7 +1194,7 @@ async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def healthlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
-        await update.message.reply_text("Usage: /healthlog NAME")
+        await update.message.reply_text("Usage: /healthlog Name")
         return
     name = context.args[0]
     rabbit, records = get_health_log(name)
@@ -1080,13 +1212,13 @@ async def healthlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def weight_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /weight NAME KG")
+        await update.message.reply_text("Usage: /weight Name KG")
         return
     name = context.args[0]
     try:
         kg = float(context.args[1])
     except ValueError:
-        await update.message.reply_text("Weight must be a number, e.g. /weight Bella 2.3")
+        await update.message.reply_text("KG must be a number.")
         return
     msg = add_weight(name, kg)
     await update.message.reply_text(msg)
@@ -1094,7 +1226,7 @@ async def weight_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def weightlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
-        await update.message.reply_text("Usage: /weightlog NAME")
+        await update.message.reply_text("Usage: /weightlog Name")
         return
     name = context.args[0]
     rabbit, records = get_weight_log(name)
@@ -1110,15 +1242,17 @@ async def weightlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
+# --- money / feed ---
+
 async def sell_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /sell NAME PRICE [BUYER]")
+        await update.message.reply_text("Usage: /sell Name Price [Buyer]")
         return
     name = context.args[0]
     try:
         price = float(context.args[1])
     except ValueError:
-        await update.message.reply_text("Price must be a number, e.g. /sell Bella 50 John")
+        await update.message.reply_text("Price must be a number.")
         return
     buyer = " ".join(context.args[2:]) if len(context.args) > 2 else None
     msg = record_sale(name, price, buyer)
@@ -1127,7 +1261,7 @@ async def sell_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def expense_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /expense AMOUNT CATEGORY [NOTE]")
+        await update.message.reply_text("Usage: /expense Amount Category [Note]")
         return
     try:
         amount = float(context.args[0])
@@ -1142,7 +1276,7 @@ async def expense_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def electric_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
-        await update.message.reply_text("Usage: /electric AMOUNT [NOTE]")
+        await update.message.reply_text("Usage: /electric Amount [Note]")
         return
     try:
         amount = float(context.args[0])
@@ -1156,13 +1290,13 @@ async def electric_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def feed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /feed KG COST [NOTE]")
+        await update.message.reply_text("Usage: /feed KG Cost [Note]")
         return
     try:
         kg = float(context.args[0])
         cost = float(context.args[1])
     except ValueError:
-        await update.message.reply_text("KG and COST must be numbers.")
+        await update.message.reply_text("KG and Cost must be numbers.")
         return
     note = " ".join(context.args[2:]) if len(context.args) > 2 else None
     msg = add_feed(kg, cost, note)
@@ -1224,9 +1358,11 @@ async def feedmonth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
+# --- tasks / reminders ---
+
 async def remind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /remind YYYY-MM-DD TEXT")
+        await update.message.reply_text("Usage: /remind YYYY-MM-DD Text")
         return
     date_str = context.args[0]
     title = " ".join(context.args[1:])
@@ -1260,6 +1396,8 @@ async def donetask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Task #{tid} not found.")
 
 
+# --- stats / info ---
+
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = get_stats_message()
     await update.message.reply_text(msg)
@@ -1267,7 +1405,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
-        await update.message.reply.Text("Usage: /info NAME")
+        await update.message.reply_text("Usage: /info Name")
         return
     msg = get_info_message(context.args[0])
     await update.message.reply_text(msg)
@@ -1278,20 +1416,7 @@ async def farmsummary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-async def nextdue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 1:
-        await update.message.reply_text("Usage: /nextdue DOE")
-        return
-    doe_name = context.args[0]
-    nxt = get_next_due_for_doe(doe_name)
-    if not nxt:
-        await update.message.reply_text(f"No open breedings for {doe_name}.")
-        return
-    msg = f"{doe_name} is due around {nxt['expected_due_date']} (bred on {nxt['mating_date']})."
-    await update.message.reply_text(msg)
-
-
-# ================== DAILY REMINDERS ==================
+# --- daily reminders --- 
 
 async def daily_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
@@ -1299,7 +1424,7 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE):
     weaning = get_weaning_today()
     tasks = get_tasks_for_date(date.today())
 
-    msg = "📅 Daily Farm Update:\n"
+    msg = "📅 Daily farm update:\n"
     if due:
         msg += "\n🍼 Due today:\n"
         for r in due:
@@ -1309,11 +1434,11 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE):
         for r in weaning:
             msg += f"- {r['name']}\n"
     if tasks:
-        msg += "\n🧹 Other tasks:\n"
+        msg += "\n🧹 Tasks:\n"
         for t in tasks:
             msg += f"- #{t['id']} {t['title']}\n"
     if not due and not weaning and not tasks:
-        msg += "No tasks today 🐰"
+        msg += "Nothing scheduled today 🐰"
 
     await context.bot.send_message(chat_id=chat_id, text=msg)
 
@@ -1332,7 +1457,7 @@ async def subscribe_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id=chat_id,
         name=job_name,
     )
-    await update.message.reply_text("✅ Daily reminders enabled.")
+    await update.message.reply_text("✅ Daily farm summary enabled.")
 
 
 async def unsubscribe_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1344,12 +1469,12 @@ async def unsubscribe_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     for job in jobs:
         job.schedule_removal()
-    await update.message.reply_text("❌ Reminders stopped.")
+    await update.message.reply_text("❌ Daily farm summary disabled.")
 
 
-# ================== MAIN ==================
+# ================== APP & MAIN ==================
 
-def main():
+def build_app() -> Application:
     init_db()
     logging.basicConfig(level=logging.INFO)
 
@@ -1400,10 +1525,11 @@ def main():
     app.add_handler(CommandHandler("subscribe", subscribe_cmd))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe_cmd))
 
-    # Create and set event loop (works well on Python 3.11 / 3.13)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    return app
 
+
+def main():
+    app = build_app()
     app.run_polling()
 
 
