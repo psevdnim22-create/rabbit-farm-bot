@@ -7,15 +7,16 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import csv
 import tempfile
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
     CallbackQueryHandler,
     MessageHandler,
+    ConversationHandler,
     filters,
 )
+
 
 
 # ================== CONFIG ==================
@@ -23,6 +24,17 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable is not set")
+
+# ================== ADD RABBIT WIZARD STATES ==================
+
+(
+    ADD_NAME,
+    ADD_SEX,
+    ADD_CAGE,
+    ADD_SECTION,
+    ADD_WEIGHT,
+) = range(5)
+
 
 # OWNER_ID:
 #  - 0 means "no owner set yet" -> everyone can use commands
@@ -1546,6 +1558,187 @@ def get_climate_warning_short():
 
 # ================== TELEGRAM HANDLERS ==================
 
+# ================== ADD-RABBIT WIZARD ==================
+
+async def addrabbit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start interactive rabbit creation."""
+    # make sure only you can use it
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    context.user_data["new_rabbit"] = {}
+    await update.message.reply_text(
+        "🐰 Let's add a new rabbit.\n\n"
+        "First, send the *name* of the rabbit:",
+        parse_mode="Markdown",
+    )
+    return ADD_NAME
+
+
+async def addrabbit_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    name = update.message.text.strip()
+    if not name:
+        await update.message.reply_text("Please send a non-empty name 🙂")
+        return ADD_NAME
+
+    context.user_data.setdefault("new_rabbit", {})["name"] = name
+    await update.message.reply_text(
+        f"Got it: *{name}*.\n\nIs it male or female? Type *M* or *F*.",
+        parse_mode="Markdown",
+    )
+    return ADD_SEX
+
+
+async def addrabbit_sex(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    sex_raw = update.message.text.strip().upper()
+    if sex_raw not in ("M", "F"):
+        await update.message.reply_text("Sex must be *M* or *F*. Please type again.", parse_mode="Markdown")
+        return ADD_SEX
+
+    data = context.user_data.get("new_rabbit", {})
+    name = data.get("name")
+
+    # Try to create rabbit now
+    ok = add_rabbit(name, sex_raw)
+    if not ok:
+        await update.message.reply_text(
+            f"❌ A rabbit with the name *{name}* already exists. Wizard cancelled.",
+            parse_mode="Markdown",
+        )
+        context.user_data.pop("new_rabbit", None)
+        return ConversationHandler.END
+
+    data["sex"] = sex_raw
+    context.user_data["new_rabbit"] = data
+
+    await update.message.reply_text(
+        "✅ Rabbit created in database!\n\n"
+        "Now send the *cage number* (for example: A1).\n"
+        "If you want to skip cage, type `-`.",
+        parse_mode="Markdown",
+    )
+    return ADD_CAGE
+
+
+async def addrabbit_cage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    cage_raw = update.message.text.strip()
+    data = context.user_data.get("new_rabbit", {})
+    name = data.get("name")
+
+    cage = None if cage_raw in ("-", "skip", "SKIP") else cage_raw
+    data["cage"] = cage
+    context.user_data["new_rabbit"] = data
+
+    if cage:
+        await update.message.reply_text(
+            f"✅ Cage set to *{cage}*.\n\n"
+            "Now send *section* (for example: left / right / top).\n"
+            "If you want to skip section, type `-`.",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            "Cage skipped.\n\n"
+            "Now send *section* (for example: left / right / top).\n"
+            "If you want to skip section, type `-`.",
+            parse_mode="Markdown",
+        )
+    return ADD_SECTION
+
+
+async def addrabbit_section(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    section_raw = update.message.text.strip()
+    data = context.user_data.get("new_rabbit", {})
+    name = data.get("name")
+    cage = data.get("cage")
+
+    section = None if section_raw in ("-", "skip", "SKIP") else section_raw
+    data["section"] = section
+    context.user_data["new_rabbit"] = data
+
+    # If we have cage/section, store them to DB now
+    if cage or section:
+        set_cage_section(name, cage or "", section)
+
+    if section:
+        await update.message.reply_text(
+            f"✅ Section set to *{section}*.\n\n"
+            "Finally, send the *weight in kg* (example: 2.3).\n"
+            "If you want to skip weight, type `-`.",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            "Section skipped.\n\n"
+            "Finally, send the *weight in kg* (example: 2.3).\n"
+            "If you want to skip weight, type `-`.",
+            parse_mode="Markdown",
+        )
+    return ADD_WEIGHT
+
+
+async def addrabbit_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return ConversationHandler.END
+
+    data = context.user_data.get("new_rabbit", {})
+    name = data.get("name")
+    sex = data.get("sex")
+    cage = data.get("cage")
+    section = data.get("section")
+
+    text = update.message.text.strip()
+    weight = None
+
+    if text not in ("-", "skip", "SKIP"):
+        try:
+            weight = float(text.replace(",", "."))
+        except ValueError:
+            await update.message.reply_text(
+                "Weight must be a number (example: 2.3). Try again or type `-` to skip.",
+                parse_mode="Markdown",
+            )
+            return ADD_WEIGHT
+
+    if weight is not None:
+        add_weight(name, weight)
+
+    # Build summary
+    lines = [f"🎉 Rabbit *{name}* added!"]
+    lines.append(f"- Sex: {sex}")
+    if cage:
+        lines.append(f"- Cage: {cage}")
+    if section:
+        lines.append(f"- Section: {section}")
+    if weight is not None:
+        lines.append(f"- Weight: {weight} kg")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    # clean wizard data
+    context.user_data.pop("new_rabbit", None)
+    return ConversationHandler.END
+
+
+async def addrabbit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allow user to cancel wizard with /cancel."""
+    context.user_data.pop("new_rabbit", None)
+    await update.message.reply_text("❌ Add-rabbit wizard cancelled.")
+    return ConversationHandler.END
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_owner(update, context):
         return
@@ -1554,8 +1747,12 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🐰 Rabbit Farm Bot\n\n"
         "Rabbits:\n"
-        "/addrabbit NAME M/F\n"
-        "/rabbits\n"
+        "/addrabbit – interactive wizard\n"
+"/addrabbit_fast NAME M/F – quick add\n"
+"/rabbits\n"
+        "/cancel – cancel current wizard\n"
+
+
         "/active\n"
         "/setcage NAME CAGE [SECTION]\n"
         "/setparents CHILD MOTHER FATHER\n"
@@ -2752,6 +2949,21 @@ def start_http_server():
 def build_app() -> Application:
     app = Application.builder().token(BOT_TOKEN).build()
 
+      # --- Add-rabbit wizard conversation ---
+    addrabbit_conv = ConversationHandler(
+        entry_points=[CommandHandler("addrabbit", addrabbit_start)],
+        states={
+            ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_name)],
+            ADD_SEX: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_sex)],
+            ADD_CAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_cage)],
+            ADD_SECTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_section)],
+            ADD_WEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_weight)],
+        },
+        fallbacks=[CommandHandler("cancel", addrabbit_cancel)],
+    )
+
+    app.add_handler(addrabbit_conv)
+
     # Core
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("help", start_cmd))
@@ -2763,7 +2975,7 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_"))
 
     # Rabbits
-    app.add_handler(CommandHandler("addrabbit", addrabbit_cmd))
+    app.add_handler(CommandHandler("addrabbit_fast", addrabbit_cmd))
     app.add_handler(CommandHandler("rabbits", rabbits_cmd))
     app.add_handler(CommandHandler("active", active_cmd))
     app.add_handler(CommandHandler("setcage", setcage_cmd))
@@ -2849,6 +3061,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
