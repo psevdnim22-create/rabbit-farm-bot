@@ -926,12 +926,7 @@ def get_info_message(name):
     lines = [f"🐰 {r['name']} ({r['sex']})"]
     lines.append(f"Status: {r['status'] or 'unknown'}")
 
-    if r["status"] == "dead":
-        if r["death_date"]:
-            lines.append(f"  Died: {r['death_date']}")
-        if r["death_reason"]:
-            lines.append(f"  Reason: {r['death_reason']}")
-
+    # Location
     if r["cage"] or r["section"]:
         loc = []
         if r["cage"]:
@@ -940,6 +935,7 @@ def get_info_message(name):
             loc.append(f"section {r['section']}")
         lines.append("Location: " + ", ".join(loc))
 
+    # Parents
     mother = get_rabbit_by_id(r["mother_id"])
     father = get_rabbit_by_id(r["father_id"])
     if mother or father:
@@ -947,9 +943,14 @@ def get_info_message(name):
         f = father["name"] if father else "unknown"
         lines.append(f"Parents: {m} × {f}")
 
-    if r["photo_file_id"]:
-        lines.append("Photo: 📷 stored (use /photo " + r["name"] + " to view)")
+    # 🔹 Last weight
+    rabbit_w, w_rows = get_weight_log(name, limit=1)
+    if rabbit_w and w_rows:
+        lines.append(
+            f"Last weight: {w_rows[0]['weight_kg']} kg on {w_rows[0]['weigh_date']}"
+        )
 
+    # Litters info for does
     if r["sex"] == "F":
         conn = get_db()
         cur = conn.cursor()
@@ -981,10 +982,12 @@ def get_info_message(name):
         if nxt:
             lines.append(f"Next due: {nxt['expected_due_date']} (bred on {nxt['mating_date']})")
 
-    rabbit, h_records = get_health_log(name, limit=1)
-    if rabbit and h_records:
+    # Last health
+    rabbit_h, h_records = get_health_log(name, limit=1)
+    if rabbit_h and h_records:
         lines.append(f"Last health: {h_records[0]['record_date']} – {h_records[0]['note']}")
 
+    # Last sale
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
@@ -999,6 +1002,7 @@ def get_info_message(name):
         lines.append(f"Last sale: {s['sale_date']} for {s['price']} to {s['buyer'] or 'unknown buyer'}")
 
     return "\n".join(lines)
+
 
 
 def get_farmsummary_message():
@@ -2205,12 +2209,20 @@ async def rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         section = r["section"] if r["section"] else "—"
         status = r["status"] if r["status"] else "unknown"
 
+        # 🔹 Get last weight for this rabbit
+        _, w_rows = get_weight_log(r["name"], limit=1)
+        if w_rows:
+            w_line = f"Last weight: {w_rows[0]['weight_kg']} kg on {w_rows[0]['weigh_date']}"
+        else:
+            w_line = "Last weight: —"
+
         lines.append(
             f"🐰 *{r['name']}*\n"
             f"Sex: {r['sex']}\n"
             f"Cage: {cage}\n"
             f"Section: {section}\n"
             f"Status: {status}\n"
+            f"{w_line}\n"
             f"--------------------------"
         )
 
@@ -2218,6 +2230,7 @@ async def rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🐰 *All Rabbits (Full View)*\n\n" + "\n".join(lines),
         parse_mode="Markdown",
     )
+
 
 
 async def active_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3290,6 +3303,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
