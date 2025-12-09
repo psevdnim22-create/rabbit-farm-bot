@@ -8,9 +8,15 @@ import csv
 import tempfile
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
-
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
 )
+
 
 # ================== CONFIG ==================
 # Get token from environment (Render Environment -> BOT_TOKEN)
@@ -150,7 +156,7 @@ def init_db():
         )
     """)
 
-    # Settings (for climate, etc.)
+     # Settings (for climate, etc.)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -158,19 +164,7 @@ def init_db():
         )
     """)
 
-    conn.commit()
-    conn.close()
-
-
-def set_setting(key: str, value: str):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO settings(key, value)
-        VALUES(?, ?)
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value
-    """, (key, value))
-        # Achievements
+    # Achievements
     cur.execute("""
         CREATE TABLE IF NOT EXISTS achievements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,6 +172,10 @@ def set_setting(key: str, value: str):
             unlocked_date TEXT NOT NULL
         )
     """)
+
+    conn.commit()
+    conn.close()
+
 
     conn.commit()
     conn.close()
@@ -223,6 +221,16 @@ def describe_achievement(key: str) -> str:
     }
     return mapping.get(key, key)
 
+def set_setting(key: str, value: str):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO settings(key, value)
+        VALUES(?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, (key, value))
+    conn.commit()
+    conn.close()
 
 
 def get_setting(key: str):
@@ -2882,5 +2890,6 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
