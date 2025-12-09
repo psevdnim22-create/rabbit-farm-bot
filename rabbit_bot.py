@@ -2961,6 +2961,40 @@ async def keep_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = decide_keep_or_sell(name)
     await update.message.reply_text(msg)
 
+async def resetfarm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    tables = [
+        "rabbits",
+        "breedings",
+        "health_records",
+        "sales",
+        "expenses",
+        "feed_logs",
+        "weights",
+        "tasks",
+        "settings",
+        "photos",
+        "achievements"
+    ]
+
+    for t in tables:
+        cur.execute(f"DELETE FROM {t}")
+
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(
+        "✅ Farm RESET completed.\n\n"
+        "All rabbits, money, weights, photos, tasks, breedings and stats are now EMPTY.\n"
+        "You can now start fresh with /start 🐰"
+    )
+
+
 
 # ---- Climate ----
 
@@ -3287,6 +3321,9 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("subscribe", subscribe_cmd))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe_cmd))
 
+    app.add_handler(CommandHandler("resetfarm", resetfarm_cmd))
+
+
     return app
 
 
@@ -3303,6 +3340,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
