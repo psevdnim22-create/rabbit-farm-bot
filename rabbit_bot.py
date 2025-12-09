@@ -3175,13 +3175,27 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("achievements", achievements_cmd))
     app.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_"))
 
-    # Rabbits
+        # Rabbits
+    addrabbit_conv = ConversationHandler(
+        entry_points=[CommandHandler("addrabbit", addrabbit_start)],
+        states={
+            ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_name)],
+            ADD_SEX: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_sex)],
+            ADD_CAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_cage)],
+            ADD_SECTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_section)],
+            ADD_WEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_weight)],
+        },
+        fallbacks=[CommandHandler("cancel", addrabbit_cancel)],
+    )
+
+    app.add_handler(addrabbit_conv)  # /addrabbit wizard
     app.add_handler(CommandHandler("rabbits", rabbits_cmd))
     app.add_handler(CommandHandler("active", active_cmd))
     app.add_handler(CommandHandler("setcage", setcage_cmd))
     app.add_handler(CommandHandler("setparents", setparents_cmd))
     app.add_handler(CommandHandler("checkpair", checkpair_cmd))
     app.add_handler(CommandHandler("markdead", markdead_cmd))
+
 
     # Breeding & litters
     app.add_handler(CommandHandler("breed", breed_cmd))
@@ -3261,6 +3275,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
