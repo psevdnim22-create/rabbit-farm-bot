@@ -26,7 +26,7 @@ if not BOT_TOKEN:
 #  - 0 means "no owner set yet" -> everyone can use commands
 #  - Once you know your Telegram user ID from /whoami,
 #    replace 0 with your ID (e.g. OWNER_ID = 123456789) to make bot private.
-OWNER_ID = 0  # <<< CHANGE THIS to your Telegram user ID to make the bot private
+OWNER_ID = 5891168987 # <<< CHANGE THIS to your Telegram user ID to make the bot private
 
 DB_FILE = "rabbits.db"
 
@@ -2651,3 +2651,4 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
