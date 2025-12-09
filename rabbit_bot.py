@@ -6,7 +6,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 # ================== CONFIG ==================
 # Get token from environment (Render Environment -> BOT_TOKEN)
@@ -54,6 +54,8 @@ def init_db():
     safe_alter(cur, "ALTER TABLE rabbits ADD COLUMN status TEXT DEFAULT 'active'")
     safe_alter(cur, "ALTER TABLE rabbits ADD COLUMN death_date TEXT")
     safe_alter(cur, "ALTER TABLE rabbits ADD COLUMN death_reason TEXT")
+    # NEW: photo support
+    safe_alter(cur, "ALTER TABLE rabbits ADD COLUMN photo_file_id TEXT")
 
     # Breedings
     cur.execute("""
@@ -280,6 +282,21 @@ def checkpair_inbreeding(name1, name2):
         return f"⚠️ Related: shared grandparent(s) {', '.join(names)}."
 
     return "✅ No close relation found (parents/grandparents)."
+
+
+# ==== PHOTO SUPPORT (NEW) ====
+
+def set_rabbit_photo(name: str, file_id: str):
+    """Save Telegram file_id of a photo for a rabbit."""
+    r = get_rabbit(name)
+    if not r:
+        return False, "❌ Rabbit not found. Make sure the caption matches the rabbit's name."
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE rabbits SET photo_file_id=? WHERE id=?", (file_id, r["id"]))
+    conn.commit()
+    conn.close()
+    return True, f"✅ Photo saved for {name}."
 
 
 # ================== BREEDING & LITTERS ==================
@@ -757,6 +774,10 @@ def get_info_message(name):
         f = father["name"] if father else "unknown"
         lines.append(f"Parents: {m} × {f}")
 
+    # Photo info
+    if r["photo_file_id"]:
+        lines.append("Photo: 📷 stored (use /photo " + r["name"] + " to view)")
+
     if r["sex"] == "F":
         conn = get_db()
         cur = conn.cursor()
@@ -867,6 +888,10 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/info NAME\n"
         "/stats\n"
         "/farmsummary\n"
+        "\nPhotos:\n"
+        "Send a photo with caption = NAME to assign it\n"
+        "/photo NAME (show stored photo)\n"
+        "\nAutomation:\n"
         "/subscribe\n"
         "/unsubscribe"
     )
@@ -1250,7 +1275,7 @@ async def remind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d_str = parts[1]
     text = parts[2]
     try:
-        d = date.fromisoformat(d_str)
+        _ = date.fromisoformat(d_str)
     except ValueError:
         await update.message.reply_text("Date must be in YYYY-MM-DD format.")
         return
@@ -1307,6 +1332,54 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def farmsummary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = get_farmsummary_message()
+    await update.message.reply_text(msg)
+
+
+# ---- Photos (NEW) ----
+
+async def photo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send stored photo of a rabbit."""
+    parts = update.message.text.split()
+    if len(parts) < 2:
+        await update.message.reply_text("Usage: /photo NAME")
+        return
+    name = parts[1]
+    r = get_rabbit(name)
+    if not r:
+        await update.message.reply_text("❌ Rabbit not found.")
+        return
+    if not r["photo_file_id"]:
+        await update.message.reply_text(
+            "No photo stored for this rabbit.\n"
+            "Send a photo with caption = NAME to assign one."
+        )
+        return
+    await context.bot.send_photo(
+        chat_id=update.effective_chat.id,
+        photo=r["photo_file_id"],
+        caption=f"🐰 {name}"
+    )
+
+
+async def photo_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle incoming photos: caption must start with rabbit name."""
+    if not update.message or not update.message.photo:
+        return
+
+    caption = (update.message.caption or "").strip()
+    if not caption:
+        await update.message.reply_text(
+            "Please write the rabbit's NAME in the photo caption to assign it.\n"
+            "Example: send photo with caption: Luna"
+        )
+        return
+
+    # Use first word of caption as rabbit name
+    name = caption.split()[0]
+    photo = update.message.photo[-1]  # highest resolution
+    file_id = photo.file_id
+
+    ok, msg = set_rabbit_photo(name, file_id)
     await update.message.reply_text(msg)
 
 
@@ -1465,6 +1538,10 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("info", info_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("farmsummary", farmsummary_cmd))
+
+    # Photos
+    app.add_handler(CommandHandler("photo", photo_cmd))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_upload_handler))
 
     # Subscribe
     app.add_handler(CommandHandler("subscribe", subscribe_cmd))
