@@ -2190,7 +2190,6 @@ async def addrabbit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- Rabbits ----
 
 
-
 async def rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_owner(update, context):
         return
@@ -2199,10 +2198,26 @@ async def rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rows:
         await update.message.reply_text("No rabbits in database.")
         return
+
     lines = []
     for r in rows:
-        lines.append(f"{r['name']} ({r['sex']}) - status: {r['status']}")
-    await update.message.reply_text("🐰 All rabbits:\n" + "\n".join(lines))
+        cage = r["cage"] if r["cage"] else "—"
+        section = r["section"] if r["section"] else "—"
+        status = r["status"] if r["status"] else "unknown"
+
+        lines.append(
+            f"🐰 *{r['name']}*\n"
+            f"Sex: {r['sex']}\n"
+            f"Cage: {cage}\n"
+            f"Section: {section}\n"
+            f"Status: {status}\n"
+            f"--------------------------"
+        )
+
+    await update.message.reply_text(
+        "🐰 *All Rabbits (Full View)*\n\n" + "\n".join(lines),
+        parse_mode="Markdown",
+    )
 
 
 async def active_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3275,6 +3290,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
