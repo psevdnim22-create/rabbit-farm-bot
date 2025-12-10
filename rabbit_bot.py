@@ -1992,12 +1992,13 @@ def build_main_menu_keyboard() -> InlineKeyboardMarkup:
 
 def build_rabbits_menu_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("➕ Add rabbit", callback_data="RABBITS_ADD_HELP")],
+        [InlineKeyboardButton("➕ Add rabbit", callback_data="RABBITS_ADD")],
         [InlineKeyboardButton("📋 All rabbits", callback_data="RABBITS_LIST")],
         [InlineKeyboardButton("✅ Active rabbits", callback_data="RABBITS_ACTIVE")],
-        [InlineKeyboardButton("⬅️ Back to main menu", callback_data="MENU_MAIN")],
+        [InlineKeyboardButton("⬅ Back to main menu", callback_data="MENU_MAIN")],
     ]
     return InlineKeyboardMarkup(keyboard)
+
 
 
 def build_breeding_menu_keyboard() -> InlineKeyboardMarkup:
@@ -2091,85 +2092,39 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Menu closed.")
         return
 
-    # ========== RABBITS MENU & ACTIONS ==========
+        # ========== RABBITS MENU & ACTIONS ==========
 
-    # Open Rabbits submenu
     if data == "MENU_RABBITS":
         await query.edit_message_text(
-            "🐰 *Rabbits*\n\n"
-            "What do you want to do?",
+            "🐰 *Rabbits*\n\nWhat do you want to do?",
             parse_mode="Markdown",
             reply_markup=build_rabbits_menu_keyboard(),
         )
         return
 
-        # List all rabbits (full view)
-    if data == "RABBITS_ALL":
-        rows = list_rabbits(active_only=False)
-        if not rows:
-            text = "No rabbits in database."
-        else:
-            lines = ["🐰 *All rabbits (full view)*", ""]
-            for r in rows:
-                cage = r["cage"] or "—"
-                section = r["section"] or "—"
-                lines.append(
-                    f"• {r['name']} ({r['sex']})\n"
-                    f"  Cage: {cage}\n"
-                    f"  Section: {section}\n"
-                    f"  Status: {r['status']}\n"
-                    "---------------------------"
-                )
-            text = "\n".join(lines)
+    # ✅ ADD RABBIT (starts wizard)
+    if data == "RABBITS_ADD":
+        return await addrabbit_start(update, context)
 
-        await query.message.reply_text(text, parse_mode="Markdown")
-        return
+    # ✅ ALL RABBITS
+    if data == "MENU_RABBITS_ALL":
+        return await rabbits_cmd(update, context)
 
-    # List only active rabbits
-    if data == "RABBITS_ACTIVE":
-        rows = list_rabbits(active_only=True)
-        if not rows:
-            text = "No active rabbits."
-        else:
-            lines = ["🐰 *Active rabbits*", ""]
-            for r in rows:
-                cage = r["cage"] or "—"
-                section = r["section"] or "—"
-                lines.append(
-                    f"• {r['name']} ({r['sex']})\n"
-                    f"  Cage: {cage}\n"
-                    f"  Section: {section}\n"
-                    "---------------------------"
-                )
-            text = "\n".join(lines)
+    # ✅ ACTIVE RABBITS
+    if data == "MENU_RABBITS_ACTIVE":
+        return await active_cmd(update, context)
 
-        await query.message.reply_text(text, parse_mode="Markdown")
-        return
-
-
-    # Go back from Rabbits submenu to main menu
+    # ✅ BACK TO MAIN MENU
     if data == "MENU_RABBITS_BACK":
         await query.edit_message_text(
-            "🐰 *Rabbit Farm Menu*\n\n"
-            "Choose what you want to do:",
+            "🐰 *Rabbit Farm Menu*\n\nChoose what you want to do:",
             parse_mode="Markdown",
             reply_markup=build_main_menu_keyboard(),
         )
         return
 
-    # --- THIS IS THE IMPORTANT ONE: ADD RABBIT FROM BUTTON ---
-    if data == "MENU_ADDRABBIT":
-        # Start the same wizard as /addrabbit command
-        await query.message.reply_text("🐰 Starting Add Rabbit wizard...")
-        return await addrabbit_start(update, context)
 
-    # List active rabbits (same as /active)
-    if data == "MENU_RABBITS_ACTIVE":
-        return await active_cmd(update, context)
-
-    # List all rabbits (same as /rabbits)
-    if data == "MENU_RABBITS_ALL":
-        return await rabbits_cmd(update, context)
+  
 
     # ========== FINANCE MENU (OPTIONAL, IF YOU USE IT) ==========
 
@@ -3657,6 +3612,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
