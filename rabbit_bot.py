@@ -3583,42 +3583,56 @@ def start_http_server():
 def build_app() -> Application:
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # --- Add-rabbit wizard conversation ---
-   addrabbit_conv = ConversationHandler(
-    entry_points=[
-        CommandHandler("addrabbit", addrabbit_start),
-        CallbackQueryHandler(addrabbit_start, pattern="^RABBITS_ADD$"),
-    ],
-    states={
-        ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_name)],
-        ADD_SEX: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_sex)],
-        ADD_CAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_cage)],
-        ADD_SECTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_section)],
-        ADD_WEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_weight)],
-    },
-    fallbacks=[CommandHandler("cancel", addrabbit_cancel)],
-)
+    # =============================
+    # ADD RABBIT WIZARD (COMMAND + BUTTON)
+    # =============================
+    addrabbit_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler("addrabbit", addrabbit_start),
+            CallbackQueryHandler(addrabbit_start, pattern="^RABBITS_ADD$"),
+        ],
+        states={
+            ADD_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_name)
+            ],
+            ADD_SEX: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_sex)
+            ],
+            ADD_CAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_cage)
+            ],
+            ADD_SECTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_section)
+            ],
+            ADD_WEIGHT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_weight)
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", addrabbit_cancel)
+        ],
+    )
 
+    # ✅ THIS LINE IS CRITICAL (WITHOUT IT BUTTONS BREAK)
+    app.add_handler(addrabbit_conv)
 
-    # Core
+    # =============================
+    # CORE COMMANDS
+    # =============================
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("help", start_cmd))
     app.add_handler(CommandHandler("whoami", whoami_cmd))
 
-    # App Menu + Achievements
+    # =============================
+    # MENU SYSTEM
+    # =============================
     app.add_handler(CommandHandler("menu", menu_cmd))
     app.add_handler(CommandHandler("achievements", achievements_cmd))
-    app.add_handler(
-        CallbackQueryHandler(
-            menu_callback,
-            pattern=r"^(MENU_|RABBITS_(ALL|ACTIVE))"
-        )
-    )
+    app.add_handler(CallbackQueryHandler(menu_callback))
 
-
-
-    # Rabbits
-    app.add_handler(addrabbit_conv)  # /addrabbit wizard
+    # =============================
+    # RABBIT COMMANDS
+    # =============================
     app.add_handler(CommandHandler("rabbits", rabbits_cmd))
     app.add_handler(CommandHandler("active", active_cmd))
     app.add_handler(CommandHandler("setcage", setcage_cmd))
@@ -3628,76 +3642,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("deleterabbit", deleterabbit_cmd))
     app.add_handler(CommandHandler("resetfarm", resetfarm_cmd))
 
-    # Breeding & litters
-    app.add_handler(CommandHandler("breed", breed_cmd))
-    app.add_handler(CommandHandler("forcebreed", forcebreed_cmd))
-    app.add_handler(CommandHandler("kindling", kindling_cmd))
-    app.add_handler(CommandHandler("litters", litters_cmd))
-    app.add_handler(CommandHandler("littername", littername_cmd))
-    app.add_handler(CommandHandler("nextdue", nextdue_cmd))
-    app.add_handler(CommandHandler("today", today_cmd))
-    app.add_handler(CommandHandler("weaning", weaning_cmd))
-    app.add_handler(CommandHandler("suggestbreed", suggestbreed_cmd))
-
-    # ... rest of your build_app unchanged ...
-
-
-    # Health & weights
-    app.add_handler(CommandHandler("health", health_cmd))
-    app.add_handler(CommandHandler("healthlog", healthlog_cmd))
-    app.add_handler(CommandHandler("weight", weight_cmd))
-    app.add_handler(CommandHandler("weightlog", weightlog_cmd))
-    app.add_handler(CommandHandler("growth", growth_cmd))
-    app.add_handler(CommandHandler("growthchart", growthchart_cmd))
-
-    # Money & feed
-    app.add_handler(CommandHandler("sell", sell_cmd))
-    app.add_handler(CommandHandler("expense", expense_cmd))
-    app.add_handler(CommandHandler("electric", electric_cmd))
-    app.add_handler(CommandHandler("feed", feed_cmd))
-    app.add_handler(CommandHandler("profit", profit_cmd))
-    app.add_handler(CommandHandler("profitmonth", profitmonth_cmd))
-    app.add_handler(CommandHandler("profityear", profityear_cmd))
-    app.add_handler(CommandHandler("feedstats", feedstats_cmd))
-    app.add_handler(CommandHandler("feedmonth", feedmonth_cmd))
-
-    # Exports / backup
-    app.add_handler(CommandHandler("export_rabbits", export_rabbits_cmd))
-    app.add_handler(CommandHandler("export_breedings", export_breedings_cmd))
-    app.add_handler(CommandHandler("export_sales", export_sales_cmd))
-    app.add_handler(CommandHandler("export_expenses", export_expenses_cmd))
-    app.add_handler(CommandHandler("backupdb", backupdb_cmd))
-
-    # Tasks
-    app.add_handler(CommandHandler("remind", remind_cmd))
-    app.add_handler(CommandHandler("tasklist", tasklist_cmd))
-    app.add_handler(CommandHandler("donetask", donetask_cmd))
-
-    # Info & analytics
-    app.add_handler(CommandHandler("info", info_cmd))
-    app.add_handler(CommandHandler("stats", stats_cmd))
-    app.add_handler(CommandHandler("farmsummary", farmsummary_cmd))
-    app.add_handler(CommandHandler("tree", tree_cmd))
-    app.add_handler(CommandHandler("lineperformance", lineperformance_cmd))
-    app.add_handler(CommandHandler("keep", keep_cmd))
-
-    # Climate
-    app.add_handler(CommandHandler("settemp", settemp_cmd))
-    app.add_handler(CommandHandler("climatealert", climatealert_cmd))
-
-    # Photos
-    app.add_handler(CommandHandler("photo", photo_cmd))
-    app.add_handler(MessageHandler(filters.PHOTO, photo_upload_handler))
-
-    # Subscribe
-    app.add_handler(CommandHandler("subscribe", subscribe_cmd))
-    app.add_handler(CommandHandler("unsubscribe", unsubscribe_cmd))
-
-    app.add_handler(CommandHandler("resetfarm", resetfarm_cmd))
-
-
     return app
-
 
 
 def main():
@@ -3712,6 +3657,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
