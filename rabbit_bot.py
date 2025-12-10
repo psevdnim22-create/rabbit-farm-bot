@@ -2294,16 +2294,20 @@ async def whoami_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================== ADD-RABBIT WIZARD ==================
 
 async def addrabbit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Step 1: ask for name."""
+    """Step 1: ask for name (works from /addrabbit and from the button)."""
     if not await ensure_owner(update, context):
         return ConversationHandler.END
 
-    await update.message.reply_text(
+    # Works for both normal messages and callback queries:
+    message = update.effective_message
+
+    await message.reply_text(
         "➕ Adding a new rabbit.\n\n"
         "1️⃣ Send the *name* of the rabbit:",
         parse_mode="Markdown",
     )
     return ADD_NAME
+
 
 
 async def addrabbit_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3590,7 +3594,7 @@ def build_app() -> Application:
     )
 
     # IMPORTANT: this must be added BEFORE the generic CallbackQueryHandler(menu_callback)
-    app.add_handler(addrabbit_conv)
+    
 
     # ✅ THIS LINE IS CRITICAL (WITHOUT IT BUTTONS BREAK)
     app.add_handler(addrabbit_conv)
@@ -3636,6 +3640,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
