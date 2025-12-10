@@ -196,6 +196,16 @@ def set_setting(key: str, value: str):
     conn.commit()
     conn.close()
 
+# ========= Achievements helper (temporary no-op) =========
+def unlock_achievement(code: str):
+    """
+    Dummy achievements unlocker.
+    We keep this so calls like unlock_achievement("first_rabbit")
+    don't crash the bot, even if achievements are not implemented.
+    """
+    return
+
+
 
 def get_setting(key: str):
     conn = get_db()
@@ -3610,6 +3620,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
