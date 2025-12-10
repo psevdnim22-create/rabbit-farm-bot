@@ -7,7 +7,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import csv
 import tempfile
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import (
+    Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+)
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -2058,7 +2065,8 @@ async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button presses."""
+    """Handle all inline-menu button presses."""
+    # Only you (owner) can use the menu
     if not await ensure_owner(update, context):
         return
 
@@ -2066,8 +2074,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    # ----- MAIN MENU / CLOSE -----
+    # ========== MAIN MENU / CLOSE ==========
+
     if data in ("MENU_MAIN", "MENU_START"):
+        # Show main menu
         await query.edit_message_text(
             "🐰 *Rabbit Farm Menu*\n\n"
             "Choose what you want to do:",
@@ -2077,63 +2087,91 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "MENU_CLOSE":
-        # Just remove the buttons
-        await query.edit_message_reply_markup(reply_markup=None)
+        # Just remove buttons (keep last text)
+        await query.edit_message_text("Menu closed.")
         return
 
-    # ----- RABBITS SECTION -----
+    # ========== RABBITS MENU & ACTIONS ==========
+
+    # Open Rabbits submenu
     if data == "MENU_RABBITS":
         await query.edit_message_text(
-            "🐰 *Rabbits menu*\n\n"
-            "• ➕ Add rabbit – guided form (/addrabbit)\n"
-            "• 📋 All rabbits – show every rabbit\n"
-            "• ✅ Active rabbits – only alive / kept ones\n",
+            "🐰 *Rabbits*\n\n"
+            "What do you want to do?",
             parse_mode="Markdown",
             reply_markup=build_rabbits_menu_keyboard(),
         )
         return
 
-    if data == "RABBITS_ADD_HELP":
+    # Go back from Rabbits submenu to main menu
+    if data == "MENU_RABBITS_BACK":
         await query.edit_message_text(
-            "➕ *Add rabbit*\n\n"
-            "Tap `/addrabbit` to start the guided form.\n"
-            "The bot will ask:\n"
-            "1. Name\n"
-            "2. Sex (M/F)\n"
-            "3. Cage\n"
-            "4. Section (optional)\n"
-            "5. Weight (optional)\n\n"
-            "When you’re done, use the menu again if you want.",
+            "🐰 *Rabbit Farm Menu*\n\n"
+            "Choose what you want to do:",
             parse_mode="Markdown",
-            reply_markup=build_rabbits_menu_keyboard(),
+            reply_markup=build_main_menu_keyboard(),
         )
         return
 
-    if data == "RABBITS_LIST":
-        rows = list_rabbits(active_only=False)
-        if not rows:
-            text = "No rabbits in database."
-        else:
-            lines = [f"• {r['name']} ({r['sex']}) – {r['status']}" for r in rows]
-            text = "🐰 *All rabbits*\n\n" + "\n".join(lines)
+    # --- THIS IS THE IMPORTANT ONE: ADD RABBIT FROM BUTTON ---
+    if data == "MENU_ADDRABBIT":
+        # Start the same wizard as /addrabbit command
+        await query.message.reply_text("🐰 Starting Add Rabbit wizard...")
+        return await addrabbit_start(update, context)
 
-        await query.edit_message_text(
-            text, parse_mode="Markdown", reply_markup=build_rabbits_menu_keyboard()
-        )
+    # List active rabbits (same as /active)
+    if data == "MENU_RABBITS_ACTIVE":
+        return await active_cmd(update, context)
+
+    # List all rabbits (same as /rabbits)
+    if data == "MENU_RABBITS_ALL":
+        return await rabbits_cmd(update, context)
+
+    # ========== FINANCE MENU (OPTIONAL, IF YOU USE IT) ==========
+
+    if data == "MENU_FINANCE":
+        # If you have a separate finance keyboard, show it
+        # Otherwise, you can just send instructions or call /profit, etc.
+        try:
+            kb = build_finance_menu_keyboard()
+            await query.edit_message_text(
+                "💰 *Money & Feed*\n\nChoose an option:",
+                parse_mode="Markdown",
+                reply_markup=kb,
+            )
+        except NameError:
+            # Fallback: simple text if you don't have a finance keyboard
+            await query.edit_message_text(
+                "💰 Money & feed options:\n"
+                "- Use /profit for profit summary\n"
+                "- Use /feedstats for feed stats\n"
+                "- Use /expense, /feed, /electric to add records."
+            )
         return
 
-    if data == "RABBITS_ACTIVE":
-        rows = list_rabbits(active_only=True)
-        if not rows:
-            text = "No active rabbits."
-        else:
-            lines = [f"• {r['name']} ({r['sex']}) – {r['status']}" for r in rows]
-            text = "🐰 *Active rabbits*\n\n" + "\n".join(lines)
-
-        await query.edit_message_text(
-            text, parse_mode="Markdown", reply_markup=build_rabbits_menu_keyboard()
-        )
+    # Example: if you have a separate info/analytics menu
+    if data == "MENU_INFO":
+        try:
+            kb = build_info_menu_keyboard()
+            await query.edit_message_text(
+                "📊 *Info & Analytics*\n\nChoose an option:",
+                parse_mode="Markdown",
+                reply_markup=kb,
+            )
+        except NameError:
+            await query.edit_message_text(
+                "📊 Info & analytics:\n"
+                "- /stats\n"
+                "- /farmsummary\n"
+                "- /lineperformance NAME\n"
+                "- /keep NAME"
+            )
         return
+
+    # ========== FALLBACK ==========
+    # If some unknown callback_data comes in, don't crash – just ignore politely.
+    await query.answer("Unknown menu item.", show_alert=False)
+
 
     # ----- BREEDING SECTION -----
     if data == "MENU_BREEDING":
@@ -3620,6 +3658,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
