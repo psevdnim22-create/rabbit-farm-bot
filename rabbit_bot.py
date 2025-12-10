@@ -2322,37 +2322,24 @@ async def markdead_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def deleterabbit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete a single rabbit permanently by name."""
     if not await ensure_owner(update, context):
         return
 
-    parts = update.message.text.split()
+    parts = update.message.text.split(maxsplit=1)
     if len(parts) < 2:
         await update.message.reply_text("Usage: /deleterabbit NAME")
         return
 
-    name = parts[1]
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    # Check if rabbit exists
-    cur.execute("SELECT id FROM rabbits WHERE name=?", (name,))
-    row = cur.fetchone()
-    if not row:
-        conn.close()
+    name = parts[1].strip()
+    rabbit = get_rabbit(name)
+    if not rabbit:
         await update.message.reply_text("❌ Rabbit not found.")
         return
 
-    rabbit_id = row["id"]
-
-    # Delete related records first (if those tables exist in your DB)
-    cur.execute("DELETE FROM breedings WHERE doe_id=? OR buck_id=?", (rabbit_id, rabbit_id))
-    cur.execute("DELETE FROM weights WHERE rabbit_id=?", (rabbit_id,))
-    cur.execute("DELETE FROM health WHERE rabbit_id=?", (rabbit_id,))
-
-    # Finally delete the rabbit itself
-    cur.execute("DELETE FROM rabbits WHERE id=?", (rabbit_id,))
-
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM rabbits WHERE id = ?", (rabbit["id"],))
     conn.commit()
     conn.close()
 
@@ -2362,9 +2349,38 @@ async def deleterabbit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ---- Breeding & litters ----
-async def breed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ...
+async def resetfarm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Erase ALL farm data (rabbits, breedings, etc). Use with care!"""
+    if not await ensure_owner(update, context):
+        return
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    tables = [
+        "rabbits",
+        "breedings",
+        "health_records",
+        "sales",
+        "expenses",
+        "feed_logs",
+        "weights",
+        "tasks",
+        "settings",
+        "achievements",
+    ]
+
+    for t in tables:
+        try:
+            cur.execute(f"DELETE FROM {t}")
+        except sqlite3.OperationalError:
+            # Table might not exist (e.g. achievements on older DB) – ignore
+            pass
+
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text("⚠️ All farm data has been erased.")
 
 
 
@@ -3031,6 +3047,7 @@ async def keep_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 async def resetfarm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Dangerous: wipe almost all farm data."""
     if not await ensure_owner(update, context):
         return
 
@@ -3040,28 +3057,29 @@ async def resetfarm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tables = [
         "rabbits",
         "breedings",
-        "health_records",
+        "litters",
+        "weights",
+        "health",
         "sales",
         "expenses",
-        "feed_logs",
-        "weights",
+        "feed",
         "tasks",
         "settings",
+        "electric",
         "photos",
-        "achievements"
     ]
 
     for t in tables:
-        cur.execute(f"DELETE FROM {t}")
+        try:
+            cur.execute(f"DELETE FROM {t}")
+        except sqlite3.OperationalError:
+            # Table does not exist in this DB version – ignore
+            continue
 
     conn.commit()
     conn.close()
 
-    await update.message.reply_text(
-        "✅ Farm RESET completed.\n\n"
-        "All rabbits, money, weights, photos, tasks, breedings and stats are now EMPTY.\n"
-        "You can now start fresh with /start 🐰"
-    )
+    await update.message.reply_text("🚨 All farm data has been reset.")
 
 
 
@@ -3281,7 +3299,7 @@ def start_http_server():
 def build_app() -> Application:
     app = Application.builder().token(BOT_TOKEN).build()
 
-      # --- Add-rabbit wizard conversation ---
+    # --- Add-rabbit wizard conversation ---
     addrabbit_conv = ConversationHandler(
         entry_points=[CommandHandler("addrabbit", addrabbit_start)],
         states={
@@ -3293,8 +3311,6 @@ def build_app() -> Application:
         },
         fallbacks=[CommandHandler("cancel", addrabbit_cancel)],
     )
-
-    app.add_handler(addrabbit_conv)
 
     # Core
     app.add_handler(CommandHandler("start", start_cmd))
@@ -3306,19 +3322,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("achievements", achievements_cmd))
     app.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_"))
 
-        # Rabbits
-    addrabbit_conv = ConversationHandler(
-        entry_points=[CommandHandler("addrabbit", addrabbit_start)],
-        states={
-            ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_name)],
-            ADD_SEX: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_sex)],
-            ADD_CAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_cage)],
-            ADD_SECTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_section)],
-            ADD_WEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_weight)],
-        },
-        fallbacks=[CommandHandler("cancel", addrabbit_cancel)],
-    )
-
+    # Rabbits
     app.add_handler(addrabbit_conv)  # /addrabbit wizard
     app.add_handler(CommandHandler("rabbits", rabbits_cmd))
     app.add_handler(CommandHandler("active", active_cmd))
@@ -3327,9 +3331,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("checkpair", checkpair_cmd))
     app.add_handler(CommandHandler("markdead", markdead_cmd))
     app.add_handler(CommandHandler("deleterabbit", deleterabbit_cmd))
-    
-
-
+    app.add_handler(CommandHandler("resetfarm", resetfarm_cmd))
 
     # Breeding & litters
     app.add_handler(CommandHandler("breed", breed_cmd))
@@ -3341,6 +3343,9 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("today", today_cmd))
     app.add_handler(CommandHandler("weaning", weaning_cmd))
     app.add_handler(CommandHandler("suggestbreed", suggestbreed_cmd))
+
+    # ... rest of your build_app unchanged ...
+
 
     # Health & weights
     app.add_handler(CommandHandler("health", health_cmd))
@@ -3412,6 +3417,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
