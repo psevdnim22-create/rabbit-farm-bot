@@ -1949,99 +1949,291 @@ MAIN_MENU_TEXT = (
 )
 
 
-async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "owner_guard" in globals():
-        if not await owner_guard(update, context):
-            return
+# ---- Main button menu ----
 
+def build_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Top-level menu with sections."""
     keyboard = [
         [
-            InlineKeyboardButton("🐰 Rabbits", callback_data="menu_rabbits"),
-            InlineKeyboardButton("🧬 Breeding", callback_data="menu_breeding"),
+            InlineKeyboardButton("🐰 Rabbits", callback_data="MENU_RABBITS"),
+            InlineKeyboardButton("💞 Breeding", callback_data="MENU_BREEDING"),
         ],
         [
-            InlineKeyboardButton("💰 Finance", callback_data="menu_finance"),
-            InlineKeyboardButton("🌡 Climate", callback_data="menu_climate"),
+            InlineKeyboardButton("⚕️ Health & weight", callback_data="MENU_HEALTH"),
+            InlineKeyboardButton("💸 Money", callback_data="MENU_MONEY"),
         ],
         [
-            InlineKeyboardButton("📊 Stats", callback_data="menu_stats"),
-            InlineKeyboardButton("🏆 Achievements", callback_data="menu_achievements"),
+            InlineKeyboardButton("📅 Tasks", callback_data="MENU_TASKS"),
+            InlineKeyboardButton("📊 Stats & info", callback_data="MENU_STATS"),
+        ],
+        [
+            InlineKeyboardButton("❌ Close menu", callback_data="MENU_CLOSE"),
         ],
     ]
-    await update.message.reply_text(
-        MAIN_MENU_TEXT,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown",
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_rabbits_menu_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("➕ Add rabbit", callback_data="RABBITS_ADD_HELP")],
+        [InlineKeyboardButton("📋 All rabbits", callback_data="RABBITS_LIST")],
+        [InlineKeyboardButton("✅ Active rabbits", callback_data="RABBITS_ACTIVE")],
+        [InlineKeyboardButton("⬅️ Back to main menu", callback_data="MENU_MAIN")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_breeding_menu_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("💞 Check pair", callback_data="BREED_CHECKPAIR")],
+        [InlineKeyboardButton("📅 Today / due", callback_data="BREED_TODAY")],
+        [InlineKeyboardButton("⬅️ Back to main menu", callback_data="MENU_MAIN")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_money_menu_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("➕ Sale / expense", callback_data="MONEY_HELP")],
+        [InlineKeyboardButton("📊 Profit summary", callback_data="MONEY_PROFIT")],
+        [InlineKeyboardButton("⬅️ Back to main menu", callback_data="MENU_MAIN")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_tasks_menu_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("➕ Add reminder", callback_data="TASKS_HELP")],
+        [InlineKeyboardButton("📋 Task list", callback_data="TASKS_LIST")],
+        [InlineKeyboardButton("⬅️ Back to main menu", callback_data="MENU_MAIN")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_stats_menu_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("📊 Farm summary", callback_data="STATS_SUMMARY")],
+        [InlineKeyboardButton("🌳 Rabbit tree", callback_data="STATS_TREE_HELP")],
+        [InlineKeyboardButton("⬅️ Back to main menu", callback_data="MENU_MAIN")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send the top-level button menu."""
+    if not await ensure_owner(update, context):
+        return
+
+    text = (
+        "🐰 *Rabbit Farm Menu*\n\n"
+        "Choose what you want to do:\n"
+        "• Rabbits – add, list, delete\n"
+        "• Breeding – kindling dates, due today\n"
+        "• Health & weight – logs, growth\n"
+        "• Money – sales, expenses, profit\n"
+        "• Tasks – reminders & todo\n"
+        "• Stats – overall farm summary\n"
     )
+
+    if update.message:
+        await update.message.reply_text(
+            text, parse_mode="Markdown", reply_markup=build_main_menu_keyboard()
+        )
+    else:
+        # just in case it’s called from a callback
+        chat = update.effective_chat
+        await chat.send_message(
+            text, parse_mode="Markdown", reply_markup=build_main_menu_keyboard()
+        )
 
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button presses."""
+    if not await ensure_owner(update, context):
+        return
+
     query = update.callback_query
     await query.answer()
     data = query.data
 
-    if data == "menu_rabbits":
+    # ----- MAIN MENU / CLOSE -----
+    if data in ("MENU_MAIN", "MENU_START"):
+        await query.edit_message_text(
+            "🐰 *Rabbit Farm Menu*\n\n"
+            "Choose what you want to do:",
+            parse_mode="Markdown",
+            reply_markup=build_main_menu_keyboard(),
+        )
+        return
+
+    if data == "MENU_CLOSE":
+        # Just remove the buttons
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+
+    # ----- RABBITS SECTION -----
+    if data == "MENU_RABBITS":
         await query.edit_message_text(
             "🐰 *Rabbits menu*\n\n"
-            "/rabbits – list all\n"
-            "/active – active only\n"
-            "/info NAME – rabbit info\n"
-            "/growth NAME – growth analysis\n"
-            "/growthchart NAME – growth chart\n"
-            "/photo NAME – show photo\n",
+            "• ➕ Add rabbit – guided form (/addrabbit)\n"
+            "• 📋 All rabbits – show every rabbit\n"
+            "• ✅ Active rabbits – only alive / kept ones\n",
             parse_mode="Markdown",
+            reply_markup=build_rabbits_menu_keyboard(),
         )
+        return
 
-    elif data == "menu_breeding":
+    if data == "RABBITS_ADD_HELP":
         await query.edit_message_text(
-            "🧬 *Breeding menu*\n\n"
-            "/checkpair R1 R2 – check relation\n"
-            "/breed DOE BUCK – safe breeding\n"
-            "/forcebreed DOE BUCK – force breeding\n"
-            "/kindling DOE SIZE [NAME] – litter\n"
-            "/litters DOE – litter history\n"
-            "/nextdue DOE – next due\n"
-            "/today – due today\n"
-            "/weaning – weaning today\n"
-            "/lineperformance NAME – line stats\n",
+            "➕ *Add rabbit*\n\n"
+            "Tap `/addrabbit` to start the guided form.\n"
+            "The bot will ask:\n"
+            "1. Name\n"
+            "2. Sex (M/F)\n"
+            "3. Cage\n"
+            "4. Section (optional)\n"
+            "5. Weight (optional)\n\n"
+            "When you’re done, use the menu again if you want.",
             parse_mode="Markdown",
+            reply_markup=build_rabbits_menu_keyboard(),
         )
+        return
 
-    elif data == "menu_finance":
+    if data == "RABBITS_LIST":
+        rows = list_rabbits(active_only=False)
+        if not rows:
+            text = "No rabbits in database."
+        else:
+            lines = [f"• {r['name']} ({r['sex']}) – {r['status']}" for r in rows]
+            text = "🐰 *All rabbits*\n\n" + "\n".join(lines)
+
         await query.edit_message_text(
-            "💰 *Finance & feed menu*\n\n"
-            "/sell NAME PRICE [BUYER]\n"
-            "/expense AMOUNT CATEGORY [NOTE]\n"
-            "/electric AMOUNT [NOTE]\n"
-            "/feed KG COST [NOTE]\n"
-            "/profit – all time\n"
-            "/profitmonth YYYY-MM\n"
-            "/profityear YYYY\n"
-            "/feedstats – all time\n"
-            "/feedmonth YYYY-MM\n",
-            parse_mode="Markdown",
+            text, parse_mode="Markdown", reply_markup=build_rabbits_menu_keyboard()
         )
+        return
 
-    elif data == "menu_climate":
+    if data == "RABBITS_ACTIVE":
+        rows = list_rabbits(active_only=True)
+        if not rows:
+            text = "No active rabbits."
+        else:
+            lines = [f"• {r['name']} ({r['sex']}) – {r['status']}" for r in rows]
+            text = "🐰 *Active rabbits*\n\n" + "\n".join(lines)
+
         await query.edit_message_text(
-            "🌡 *Climate & environment*\n\n"
-            "/settemp C – set temperature\n"
-            "/sethumidity PERCENT – set humidity (if you added it)\n"
-            "/climatealert – risk check\n",
-            parse_mode="Markdown",
+            text, parse_mode="Markdown", reply_markup=build_rabbits_menu_keyboard()
         )
+        return
 
-    elif data == "menu_stats":
+    # ----- BREEDING SECTION -----
+    if data == "MENU_BREEDING":
         await query.edit_message_text(
-            "📊 *Stats & summaries*\n\n"
-            "/stats – rabbit stats\n"
-            "/farmsummary – farm + finance + feed\n"
-            "/achievements – your badges\n",
+            "💞 *Breeding menu*\n\n"
+            "Useful commands:\n"
+            "• `/breed DOE BUCK`\n"
+            "• `/kindling DOE LITTER_SIZE [NAME]`\n"
+            "• `/today` – what’s due today\n"
+            "• `/nextdue DOE` – next kindling date\n",
             parse_mode="Markdown",
+            reply_markup=build_breeding_menu_keyboard(),
         )
+        return
 
-    elif data == "menu_achievements":
-        await achievements_cmd_internal(query, context)
+    if data == "BREED_CHECKPAIR":
+        await query.edit_message_text(
+            "To check a pair for inbreeding, use:\n"
+            "`/checkpair RABBIT1 RABBIT2`",
+            parse_mode="Markdown",
+            reply_markup=build_breeding_menu_keyboard(),
+        )
+        return
+
+    if data == "BREED_TODAY":
+        # Re-use /today command logic
+        await today_cmd(update, context)
+        # Keep the same buttons below the message
+        await query.edit_message_reply_markup(reply_markup=build_breeding_menu_keyboard())
+        return
+
+    # ----- MONEY SECTION -----
+    if data == "MENU_MONEY":
+        await query.edit_message_text(
+            "💸 *Money menu*\n\n"
+            "Common commands:\n"
+            "• `/sell NAME PRICE [BUYER]`\n"
+            "• `/expense AMOUNT CATEGORY [NOTE]`\n"
+            "• `/profit` – all-time profit\n"
+            "• `/profitmonth YYYY-MM` – by month\n",
+            parse_mode="Markdown",
+            reply_markup=build_money_menu_keyboard(),
+        )
+        return
+
+    if data == "MONEY_HELP":
+        await query.edit_message_text(
+            "Examples:\n"
+            "`/sell Luna 60 Giorgi`\n"
+            "`/expense 45 Feed pellets`\n",
+            parse_mode="Markdown",
+            reply_markup=build_money_menu_keyboard(),
+        )
+        return
+
+    if data == "MONEY_PROFIT":
+        await profit_cmd(update, context)
+        await query.edit_message_reply_markup(reply_markup=build_money_menu_keyboard())
+        return
+
+    # ----- TASKS SECTION -----
+    if data == "MENU_TASKS":
+        await query.edit_message_text(
+            "📅 *Tasks & reminders*\n\n"
+            "• `/remind YYYY-MM-DD TEXT`\n"
+            "• `/tasklist`\n"
+            "• `/donetask ID`\n",
+            parse_mode="Markdown",
+            reply_markup=build_tasks_menu_keyboard(),
+        )
+        return
+
+    if data == "TASKS_HELP":
+        await query.edit_message_text(
+            "Example:\n"
+            "`/remind 2025-12-20 Clean cages`\n",
+            parse_mode="Markdown",
+            reply_markup=build_tasks_menu_keyboard(),
+        )
+        return
+
+    if data == "TASKS_LIST":
+        await tasklist_cmd(update, context)
+        await query.edit_message_reply_markup(reply_markup=build_tasks_menu_keyboard())
+        return
+
+    # ----- STATS SECTION -----
+    if data == "MENU_STATS":
+        await query.edit_message_text(
+            "📊 *Stats & info*\n\n"
+            "• Farm summary: overall picture\n"
+            "• Info: details about one rabbit\n",
+            parse_mode="Markdown",
+            reply_markup=build_stats_menu_keyboard(),
+        )
+        return
+
+    if data == "STATS_SUMMARY":
+        await farmsummary_cmd(update, context)
+        await query.edit_message_reply_markup(reply_markup=build_stats_menu_keyboard())
+        return
+
+    if data == "STATS_TREE_HELP":
+        await query.edit_message_text(
+            "To see a family tree, use:\n"
+            "`/tree RABBITNAME`",
+            parse_mode="Markdown",
+            reply_markup=build_stats_menu_keyboard(),
+        )
+        return
 
 
 
@@ -3320,7 +3512,8 @@ def build_app() -> Application:
     # App Menu + Achievements
     app.add_handler(CommandHandler("menu", menu_cmd))
     app.add_handler(CommandHandler("achievements", achievements_cmd))
-    app.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu_"))
+    app.add_handler(CallbackQueryHandler(menu_callback))
+
 
     # Rabbits
     app.add_handler(addrabbit_conv)  # /addrabbit wizard
@@ -3417,6 +3610,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
