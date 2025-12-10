@@ -2001,6 +2001,7 @@ def build_rabbits_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 
+
 def build_breeding_menu_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("💞 Check pair", callback_data="BREED_CHECKPAIR")],
@@ -2456,54 +2457,61 @@ async def addrabbit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def rabbits_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all rabbits (full view). Works from /rabbits and from menu buttons."""
     if not await ensure_owner(update, context):
         return
 
+    # This works for BOTH messages and callback queries
+    message = update.effective_message
+
     rows = list_rabbits(active_only=False)
     if not rows:
-        await update.message.reply_text("No rabbits in database.")
+        await message.reply_text("No rabbits in database.")
         return
 
-    lines = []
+    lines = ["🐰 *All rabbits (full view)*", ""]
     for r in rows:
-        cage = r["cage"] if r["cage"] else "—"
-        section = r["section"] if r["section"] else "—"
-        status = r["status"] if r["status"] else "unknown"
-
-        # 🔹 Get last weight for this rabbit
-        _, w_rows = get_weight_log(r["name"], limit=1)
-        if w_rows:
-            w_line = f"Last weight: {w_rows[0]['weight_kg']} kg on {w_rows[0]['weigh_date']}"
-        else:
-            w_line = "Last weight: —"
-
+        cage = r["cage"] or "—"
+        section = r["section"] or "—"
+        status = r["status"]
         lines.append(
-            f"🐰 *{r['name']}*\n"
-            f"Sex: {r['sex']}\n"
-            f"Cage: {cage}\n"
-            f"Section: {section}\n"
-            f"Status: {status}\n"
-            f"{w_line}\n"
-            f"--------------------------"
+            f"• {r['name']} ({r['sex']})\n"
+            f"  Cage: {cage}\n"
+            f"  Section: {section}\n"
+            f"  Status: {status}\n"
+            "---------------------------"
         )
 
-    await update.message.reply_text(
-        "🐰 *All Rabbits (Full View)*\n\n" + "\n".join(lines),
-        parse_mode="Markdown",
-    )
+    await message.reply_text("\n".join(lines), parse_mode="Markdown")
+
 
 
 
 async def active_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List only active (alive, not sold) rabbits. Works from /active and from menu buttons."""
     if not await ensure_owner(update, context):
         return
 
+    message = update.effective_message
+
     rows = list_rabbits(active_only=True)
     if not rows:
-        await update.message.reply_text("No active rabbits.")
+        await message.reply_text("No active rabbits.")
         return
-    lines = [f"{r['name']} ({r['sex']})" for r in rows]
-    await update.message.reply_text("🐰 Active rabbits:\n" + "\n".join(lines))
+
+    lines = ["🐰 *Active rabbits*", ""]
+    for r in rows:
+        cage = r["cage"] or "—"
+        section = r["section"] or "—"
+        lines.append(
+            f"• {r['name']} ({r['sex']})\n"
+            f"  Cage: {cage}\n"
+            f"  Section: {section}\n"
+            "---------------------------"
+        )
+
+    await message.reply_text("\n".join(lines), parse_mode="Markdown")
+
 
 
 async def setcage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3628,6 +3636,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
