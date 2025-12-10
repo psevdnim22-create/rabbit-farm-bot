@@ -2103,6 +2103,50 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+        # List all rabbits (full view)
+    if data == "RABBITS_ALL":
+        rows = list_rabbits(active_only=False)
+        if not rows:
+            text = "No rabbits in database."
+        else:
+            lines = ["🐰 *All rabbits (full view)*", ""]
+            for r in rows:
+                cage = r["cage"] or "—"
+                section = r["section"] or "—"
+                lines.append(
+                    f"• {r['name']} ({r['sex']})\n"
+                    f"  Cage: {cage}\n"
+                    f"  Section: {section}\n"
+                    f"  Status: {r['status']}\n"
+                    "---------------------------"
+                )
+            text = "\n".join(lines)
+
+        await query.message.reply_text(text, parse_mode="Markdown")
+        return
+
+    # List only active rabbits
+    if data == "RABBITS_ACTIVE":
+        rows = list_rabbits(active_only=True)
+        if not rows:
+            text = "No active rabbits."
+        else:
+            lines = ["🐰 *Active rabbits*", ""]
+            for r in rows:
+                cage = r["cage"] or "—"
+                section = r["section"] or "—"
+                lines.append(
+                    f"• {r['name']} ({r['sex']})\n"
+                    f"  Cage: {cage}\n"
+                    f"  Section: {section}\n"
+                    "---------------------------"
+                )
+            text = "\n".join(lines)
+
+        await query.message.reply_text(text, parse_mode="Markdown")
+        return
+
+
     # Go back from Rabbits submenu to main menu
     if data == "MENU_RABBITS_BACK":
         await query.edit_message_text(
@@ -3540,17 +3584,21 @@ def build_app() -> Application:
     app = Application.builder().token(BOT_TOKEN).build()
 
     # --- Add-rabbit wizard conversation ---
-    addrabbit_conv = ConversationHandler(
-        entry_points=[CommandHandler("addrabbit", addrabbit_start)],
-        states={
-            ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_name)],
-            ADD_SEX: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_sex)],
-            ADD_CAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_cage)],
-            ADD_SECTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_section)],
-            ADD_WEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_weight)],
-        },
-        fallbacks=[CommandHandler("cancel", addrabbit_cancel)],
-    )
+   addrabbit_conv = ConversationHandler(
+    entry_points=[
+        CommandHandler("addrabbit", addrabbit_start),
+        CallbackQueryHandler(addrabbit_start, pattern="^RABBITS_ADD$"),
+    ],
+    states={
+        ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_name)],
+        ADD_SEX: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_sex)],
+        ADD_CAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_cage)],
+        ADD_SECTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_section)],
+        ADD_WEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_weight)],
+    },
+    fallbacks=[CommandHandler("cancel", addrabbit_cancel)],
+)
+
 
     # Core
     app.add_handler(CommandHandler("start", start_cmd))
@@ -3560,7 +3608,13 @@ def build_app() -> Application:
     # App Menu + Achievements
     app.add_handler(CommandHandler("menu", menu_cmd))
     app.add_handler(CommandHandler("achievements", achievements_cmd))
-    app.add_handler(CallbackQueryHandler(menu_callback))
+    app.add_handler(
+        CallbackQueryHandler(
+            menu_callback,
+            pattern=r"^(MENU_|RABBITS_(ALL|ACTIVE))"
+        )
+    )
+
 
 
     # Rabbits
@@ -3658,6 +3712,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
