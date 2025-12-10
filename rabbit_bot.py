@@ -18,7 +18,6 @@ from telegram.ext import (
     filters,
 )
 
-ADD_NAME, ADD_SEX, ADD_WEIGHT, ADD_CAGE = range(4)
 
 
 
@@ -30,13 +29,7 @@ if not BOT_TOKEN:
 
 # ================== ADD RABBIT WIZARD STATES ==================
 
-(
-    ADD_NAME,
-    ADD_SEX,
-    ADD_CAGE,
-    ADD_SECTION,
-    ADD_WEIGHT,
-) = range(5)
+ADD_NAME, ADD_SEX, ADD_CAGE, ADD_SECTION, ADD_WEIGHT = range(5)
 
 
 # OWNER_ID:
@@ -3340,6 +3333,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
