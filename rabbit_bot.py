@@ -1993,8 +1993,8 @@ def build_main_menu_keyboard() -> InlineKeyboardMarkup:
 def build_rabbits_menu_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("➕ Add rabbit", callback_data="RABBITS_ADD")],
-        [InlineKeyboardButton("📋 All rabbits", callback_data="RABBITS_LIST")],
-        [InlineKeyboardButton("✅ Active rabbits", callback_data="RABBITS_ACTIVE")],
+        [InlineKeyboardButton("📋 All rabbits", callback_data="MENU_RABBITS_ALL")],
+        [InlineKeyboardButton("✅ Active rabbits", callback_data="MENU_RABBITS_ACTIVE")],
         [InlineKeyboardButton("⬅ Back to main menu", callback_data="MENU_MAIN")],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -2092,8 +2092,9 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Menu closed.")
         return
 
-        # ========== RABBITS MENU & ACTIONS ==========
+    # ========== RABBITS MENU & ACTIONS ==========
 
+    # open Rabbits submenu
     if data == "MENU_RABBITS":
         await query.edit_message_text(
             "🐰 *Rabbits*\n\nWhat do you want to do?",
@@ -2102,27 +2103,26 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ✅ ADD RABBIT (starts wizard)
-    if data == "RABBITS_ADD":
-        return await addrabbit_start(update, context)
+    # NOTE: NO "if data == 'RABBITS_ADD'" HERE ANYMORE.
+    # That callback is now handled by the ConversationHandler entry_points.
 
-    # ✅ ALL RABBITS
+    # full rabbits list
     if data == "MENU_RABBITS_ALL":
         return await rabbits_cmd(update, context)
 
-    # ✅ ACTIVE RABBITS
+    # active rabbits
     if data == "MENU_RABBITS_ACTIVE":
         return await active_cmd(update, context)
 
-    # ✅ BACK TO MAIN MENU
+    # back from rabbits submenu to main
     if data == "MENU_RABBITS_BACK":
         await query.edit_message_text(
-            "🐰 *Rabbit Farm Menu*\n\nChoose what you want to do:",
+            "🐰 *Rabbit Farm Menu*\n\n"
+            "Choose what you want to do:",
             parse_mode="Markdown",
             reply_markup=build_main_menu_keyboard(),
         )
         return
-
 
   
 
@@ -3538,35 +3538,51 @@ def start_http_server():
 def build_app() -> Application:
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # =============================
-    # ADD RABBIT WIZARD (COMMAND + BUTTON)
-    # =============================
+    # --- Add-rabbit wizard conversation ---
     addrabbit_conv = ConversationHandler(
         entry_points=[
+            # works when you type /addrabbit
             CommandHandler("addrabbit", addrabbit_start),
+            # works when you press the "➕ Add rabbit" button (callback_data="RABBITS_ADD")
             CallbackQueryHandler(addrabbit_start, pattern="^RABBITS_ADD$"),
         ],
         states={
             ADD_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_name)
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    addrabbit_name,
+                )
             ],
             ADD_SEX: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_sex)
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    addrabbit_sex,
+                )
             ],
             ADD_CAGE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_cage)
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    addrabbit_cage,
+                )
             ],
             ADD_SECTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_section)
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    addrabbit_section,
+                )
             ],
             ADD_WEIGHT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, addrabbit_weight)
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    addrabbit_weight,
+                )
             ],
         },
-        fallbacks=[
-            CommandHandler("cancel", addrabbit_cancel)
-        ],
+        fallbacks=[CommandHandler("cancel", addrabbit_cancel)],
     )
+
+    # IMPORTANT: this must be added BEFORE the generic CallbackQueryHandler(menu_callback)
+    app.add_handler(addrabbit_conv)
 
     # ✅ THIS LINE IS CRITICAL (WITHOUT IT BUTTONS BREAK)
     app.add_handler(addrabbit_conv)
@@ -3612,6 +3628,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
