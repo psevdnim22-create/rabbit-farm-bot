@@ -2318,7 +2318,7 @@ async def markdead_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = parts[1]
     reason = parts[2] if len(parts) > 2 else None
     msg = mark_dead(name, reason)
-        await update.message.reply_text(msg)
+    await update.message.reply_text(msg)
 
 
 async def deleterabbit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3412,6 +3412,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
