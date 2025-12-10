@@ -340,6 +340,35 @@ def mark_dead(name, reason=None):
     conn.close()
     return f"☠️ {name} marked as dead." + (f" Reason: {reason}" if reason else "")
 
+def delete_rabbit_completely(rabbit_id: int):
+    """
+    Delete one rabbit and its related logs (health, weights, sales, breedings),
+    and unlink it from children (mother_id/father_id set to NULL).
+    """
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Remove logs that point directly to this rabbit
+    cur.execute("DELETE FROM health_records WHERE rabbit_id=?", (rabbit_id,))
+    cur.execute("DELETE FROM weights WHERE rabbit_id=?", (rabbit_id,))
+    cur.execute("DELETE FROM sales WHERE rabbit_id=?", (rabbit_id,))
+
+    # Remove breedings where this rabbit was doe or buck
+    cur.execute("DELETE FROM breedings WHERE doe_id=? OR buck_id=?", (rabbit_id, rabbit_id))
+
+    # Unlink as parent from other rabbits (keep children but parent unknown)
+    cur.execute("UPDATE rabbits SET mother_id=NULL WHERE mother_id=?", (rabbit_id,))
+    cur.execute("UPDATE rabbits SET father_id=NULL WHERE father_id=?", (rabbit_id,))
+
+    # Finally remove the rabbit itself
+    cur.execute("DELETE FROM rabbits WHERE id=?", (rabbit_id,))
+
+    conn.commit()
+    conn.close()
+
+
+
+
 
 # ==== INBREEDING ASSESSMENT ====
 
@@ -2289,7 +2318,54 @@ async def markdead_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = parts[1]
     reason = parts[2] if len(parts) > 2 else None
     msg = mark_dead(name, reason)
-    await update.message.reply_text(msg)
+        await update.message.reply_text(msg)
+
+
+async def deleterabbit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_owner(update, context):
+        return
+
+    parts = update.message.text.split()
+    if len(parts) < 2:
+        await update.message.reply_text("Usage: /deleterabbit NAME")
+        return
+
+    name = parts[1]
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # Check if rabbit exists
+    cur.execute("SELECT id FROM rabbits WHERE name=?", (name,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        await update.message.reply_text("❌ Rabbit not found.")
+        return
+
+    rabbit_id = row["id"]
+
+    # Delete related records first (if those tables exist in your DB)
+    cur.execute("DELETE FROM breedings WHERE doe_id=? OR buck_id=?", (rabbit_id, rabbit_id))
+    cur.execute("DELETE FROM weights WHERE rabbit_id=?", (rabbit_id,))
+    cur.execute("DELETE FROM health WHERE rabbit_id=?", (rabbit_id,))
+
+    # Finally delete the rabbit itself
+    cur.execute("DELETE FROM rabbits WHERE id=?", (rabbit_id,))
+
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(
+        f"✅ Rabbit *{name}* was permanently deleted.",
+        parse_mode="Markdown",
+    )
+
+
+# ---- Breeding & litters ----
+async def breed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ...
+
 
 
 # ---- Breeding & litters ----
@@ -3250,6 +3326,9 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("setparents", setparents_cmd))
     app.add_handler(CommandHandler("checkpair", checkpair_cmd))
     app.add_handler(CommandHandler("markdead", markdead_cmd))
+    app.add_handler(CommandHandler("deleterabbit", deleterabbit_cmd))
+    
+
 
 
     # Breeding & litters
@@ -3333,6 +3412,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
