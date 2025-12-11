@@ -3625,6 +3625,16 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("deleterabbit", deleterabbit_cmd))
     app.add_handler(CommandHandler("resetfarm", resetfarm_cmd))
 
+    # =============================
+    # EXPORTS & BACKUP
+    # =============================
+    app.add_handler(CommandHandler("export_rabbits", export_rabbits_cmd))
+    app.add_handler(CommandHandler("export_breedings", export_breedings_cmd))
+    app.add_handler(CommandHandler("export_sales", export_sales_cmd))
+    app.add_handler(CommandHandler("export_expenses", export_expenses_cmd))
+    app.add_handler(CommandHandler("backupdb", backupdb_cmd))
+
+
     return app
 
 
@@ -3640,6 +3650,7 @@ if __name__ == "__main__":
     # Start tiny HTTP healthcheck server in background so Render sees a port
     threading.Thread(target=start_http_server, daemon=True).start()
     main()
+
 
 
 
